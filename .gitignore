@@ -1,0 +1,49 @@
+# Environment variables
+.env
+.env.*
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go build output
+bin/
+build/
+dist/
+
+# Go modules
+vendor/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Coverage
+coverage.out
+
+# Temporary files
+tmp/
+temp/
+
+# Docker
+docker-data/
+
+# Node (for React frontend)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# React Build
+frontend/dist/
+frontend/build/
