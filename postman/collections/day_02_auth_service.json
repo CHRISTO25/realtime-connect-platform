@@ -1,0 +1,102 @@
+{
+  "info": {
+    "_postman_id": "3eb3e556-4fc0-496e-b9c7-cace4d82930c",
+    "name": "Messaging Platform API",
+    "description": "Microservices Backend Project  \nBuilt with Go, Gin, PostgreSQL, Redis, Docker, Kubernetes",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "42711933"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "health_check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/health",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "health"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Auth Service",
+      "item": [
+        {
+          "name": "Register User",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/api/{{API_VERSION}}/auth/register",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "api",
+                "{{API_VERSION}}",
+                "auth",
+                "register"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login User",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/api/{{API_VERSION}}/auth/login",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "api",
+                "{{API_VERSION}}",
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "User Service",
+      "item": []
+    },
+    {
+      "name": "Chat Service",
+      "item": []
+    },
+    {
+      "name": "Voice Service",
+      "item": []
+    },
+    {
+      "name": "Gateway Service",
+      "item": []
+    },
+    {
+      "name": "Notifications",
+      "item": []
+    },
+    {
+      "name": "Admin",
+      "item": []
+    }
+  ]
+}

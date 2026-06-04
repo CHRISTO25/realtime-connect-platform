@@ -1,4 +1,4 @@
-module auth-service
+module shared
 
 go 1.25.5
 
