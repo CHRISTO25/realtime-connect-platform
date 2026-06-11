@@ -1,22 +1,62 @@
 package main
 
 import (
+	"log"
+
+	"auth-service/internal/config"
+	authdb "auth-service/internal/database"
+	"auth-service/internal/repositories"
 	"auth-service/internal/routes"
+	"auth-service/internal/services"
+
+	shareddb "shared/database"
+
 	"github.com/gin-gonic/gin"
-	"shared/logger"
-	"shared/middleware"
 )
 
 func main() {
+	// 1. Load system environment variables (.env)
+	cfg := config.LoadConfig()
 
-	router := gin.New()
+	// 2. Establish connection to your Neon PostgreSQL cluster
+	db := shareddb.Connect(cfg.DatabaseURL)
 
-	router.Use(
-		logger.Logger(),
-		middleware.Recovery(),
-	)
+	// 3. Run GORM schema migrations for User and RefreshToken models
+	err := authdb.RunMigrations(db)
+	if err != nil {
+		log.Fatalf("Database migration failed: %v", err)
+	}
+	log.Println("Migrations completed successfully")
 
-	routes.SetupRoutes(router)
+	// 4. Initialize Data Architecture Layers (Dependency Injection)
+	userRepo := repositories.NewUserRepository(db)
+	authService := services.NewAuthService(userRepo)
 
-	router.Run(":8080")
+	// 5. Initialize the Gin Web Framework Engine
+	router := gin.Default()
+
+	// [EDIT] CORS Middleware added to Auth Service to handle pre-flight OPTIONS requests cleanly
+	router.Use(func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
+		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+
+		c.Next()
+	})
+
+	// 6. Bind business handlers and register application routes
+	routes.SetupRoutes(router, authService)
+
+	// 7. Start the active, blocking network server engine
+	// Falls back gracefully to your .env APP_PORT string configuration
+	log.Printf("%s started and listening on port :%s", cfg.AppName, cfg.AppPort)
+	if err := router.Run(":" + cfg.AppPort); err != nil {
+		log.Fatalf("Failed to spin up the auth service server: %v", err)
+	}
 }
