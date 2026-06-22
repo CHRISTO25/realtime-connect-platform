@@ -74,10 +74,47 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	)
 }
 
+// Login handles POST /api/v1/auth/login
+// Senior Refactor: Standardized to use your shared response engine cleanly
 func (h *AuthHandler) Login(c *gin.Context) {
+	var req dto.LoginRequest
+
+	// 1. Bind and validate the JSON body format structurally
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(
+			c,
+			http.StatusBadRequest,
+			"Invalid request payload format",
+		)
+		return
+	}
+
+	// 2. Execute cloud database verification through the service layer
+	res, err := h.authService.Login(c.Request.Context(), req)
+	if err != nil {
+		// Handle specific credentials mismatch using standard 401 Unauthorized status
+		if errors.Is(err, services.ErrInvalidCredentials) {
+			response.Error(
+				c,
+				http.StatusUnauthorized,
+				err.Error(),
+			)
+			return
+		}
+
+		// Handle fallback DB errors cleanly without leaking critical context logs
+		response.Error(
+			c,
+			http.StatusInternalServerError,
+			"An unexpected database error occurred",
+		)
+		return
+	}
+
+	// 3. Output the successfully minted string-UUID token payload
 	response.Success(
 		c,
-		"Login endpoint working",
-		nil,
+		"Login successful",
+		res,
 	)
 }

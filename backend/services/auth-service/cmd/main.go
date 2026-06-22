@@ -19,10 +19,14 @@ func main() {
 	cfg := config.LoadConfig()
 
 	// 2. Establish connection to your Neon PostgreSQL cluster
-	db := shareddb.Connect(cfg.DatabaseURL)
+	// Senior Fix: Safely capture the returned error to prevent application panic loops
+	db, err := shareddb.Connect(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("Initialization sequence aborted: %v", err)
+	}
 
 	// 3. Run GORM schema migrations for User and RefreshToken models
-	err := authdb.RunMigrations(db)
+	err = authdb.RunMigrations(db)
 	if err != nil {
 		log.Fatalf("Database migration failed: %v", err)
 	}
@@ -35,7 +39,7 @@ func main() {
 	// 5. Initialize the Gin Web Framework Engine
 	router := gin.Default()
 
-	// [EDIT] CORS Middleware added to Auth Service to handle pre-flight OPTIONS requests cleanly
+	// CORS Middleware handles React frontend pre-flight OPTIONS requests cleanly
 	router.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
@@ -51,10 +55,10 @@ func main() {
 	})
 
 	// 6. Bind business handlers and register application routes
+	// Note: Double check if your internal routes file uses SetupRoutes or SetupAuthRoutes
 	routes.SetupRoutes(router, authService)
 
 	// 7. Start the active, blocking network server engine
-	// Falls back gracefully to your .env APP_PORT string configuration
 	log.Printf("%s started and listening on port :%s", cfg.AppName, cfg.AppPort)
 	if err := router.Run(":" + cfg.AppPort); err != nil {
 		log.Fatalf("Failed to spin up the auth service server: %v", err)

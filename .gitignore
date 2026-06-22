@@ -47,3 +47,20 @@ yarn-error.log*
 # React Build
 frontend/dist/
 frontend/build/
+
+
+
+# --- Microservices & Container Orchestration ---
+# Excludes local Docker volume caches so Redis data stays on your machine
+redis_data/
+
+# Excludes the Go Workspaces file (Developers use independent go.mod definitions in CI/CD)
+go.work
+go.work.sum
+
+# Excludes compiled local service binaries if built outside containers
+services/auth-service/auth-service
+services/chat-service/chat-service
+services/gateway-service/gateway-service
+services/user-service/user-service
+services/voice-service/voice-service
