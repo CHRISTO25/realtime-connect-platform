@@ -18,4 +18,6 @@ type AuthService interface {
 
 	// CRITICAL CONTRACT: If this line is missing, your handler will say "Login is undefined"
 	Login(ctx context.Context, req dto.LoginRequest) (*dto.LoginResponse, error)
+
+	GetProfile(ctx context.Context, userID string) (*dto.UserResponse, error)
 }

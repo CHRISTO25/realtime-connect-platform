@@ -118,3 +118,22 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		res,
 	)
 }
+
+// GetMe handles GET /api/v1/auth/me
+func (h *AuthHandler) GetMe(c *gin.Context) {
+	// Grab the string-UUID user_id that was safely extracted by your shared middleware
+	userID, exists := c.Get("user_id")
+	if !exists {
+		response.Error(c, http.StatusUnauthorized, "Context user unauthorized")
+		return
+	}
+
+	// Dispatch request context down through to your business logic layer
+	res, err := h.authService.GetProfile(c.Request.Context(), userID.(string))
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	response.Success(c, "User profile retrieved successfully", res)
+}

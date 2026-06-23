@@ -37,7 +37,8 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const logout = () => {
+ const logout = () => {
+    localStorage.removeItem('token'); // Destroy trace from browser storage
     setToken(null);
     setUser(null);
   };

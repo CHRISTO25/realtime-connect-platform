@@ -2,26 +2,22 @@ package routes
 
 import (
 	"auth-service/internal/handlers"
-	"auth-service/internal/services"
-
 	"github.com/gin-gonic/gin"
+	"os"
+	"shared/middleware" // Imports your shared interceptor package
 )
 
-// SetupRoutes now accepts the AuthService dependency to pass down to the handler layer
-func SetupRoutes(router *gin.Engine, authService services.AuthService) {
+func SetupRoutes(r *gin.Engine, authHandler *handlers.AuthHandler) {
+	v1 := r.Group("/api/v1/auth")
 
-	// Initialize the handler struct with its required service dependency
-	authHandler := handlers.NewAuthHandler(authService)
+	// Public open endpoints
+	v1.POST("/register", authHandler.Register)
+	v1.POST("/login", authHandler.Login)
 
-	// Update to use the method instance instead of package-level functions
-	router.GET("/health", authHandler.HealthCheck)
-
-	v1 := router.Group("/api/v1")
+	// Protected Endpoints (Shielded by Day 6 Shared Middleware)
+	protected := r.Group("/api/v1/auth")
+	protected.Use(middleware.AuthMiddleware(os.Getenv("JWT_SECRET")))
 	{
-		auth := v1.Group("/auth")
-		{
-			auth.POST("/register", authHandler.Register)
-			auth.POST("/login", authHandler.Login)
-		}
+		protected.GET("/me", authHandler.GetMe)
 	}
 }

@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -32,4 +33,30 @@ func GenerateToken(userID string, secretKey string, duration time.Duration) (str
 	}
 
 	return signedToken, nil
+}
+
+// === DAY 6 ADDITION: MISSING VALIDATE TOKEN FUNCTION ===
+
+// ValidateToken parses, validates signature, and extracts claims from an incoming token string
+func ValidateToken(tokenString string, secretKey string) (*CustomClaims, error) {
+	// 1. Parse the token using your specific CustomClaims struct template blueprint
+	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
+		// Defensive validation: Ensure the token was signed with the expected HMAC method
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(secretKey), nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Cryptographically assert that the token claims and lifecycle signatures match
+	claims, ok := token.Claims.(*CustomClaims)
+	if !ok || !token.Valid {
+		return nil, errors.New("invalid token or expired claims layout")
+	}
+
+	return claims, nil
 }
