@@ -22,10 +22,24 @@ services:
     restart: always
     ports:
       - "8001:8001"
-    environment:
-      - DATABASE_URL=${DATABASE_URL}
+    env_file:
+      - ./services/auth-service/.env  # ◄ Reads isolated auth vars locally
     depends_on:
       - redis
+    networks:
+      - app_network
+
+  # 3. Containerized Go User Profile Microservice (DAY 9 WORKSPACE EXTENSION)
+  user-service:
+    build:
+      context: .
+      dockerfile: services/user-service/Dockerfile
+    container_name: user_service_api
+    restart: always
+    ports:
+      - "8002:8002"
+    env_file:
+      - ./services/user-service/.env  # ◄ Reads isolated user vars locally
     networks:
       - app_network
 

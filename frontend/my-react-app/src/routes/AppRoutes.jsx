@@ -1,26 +1,81 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import Login from "../pages/Login";
 import Register from "../pages/Register";
 import Dashboard from "../pages/Dashboard";
-import ProtectedRoute from "./ProtectedRoute"; // Import your guard modifier
+import ProtectedRoute from "./ProtectedRoute";
+import Navbar from '../components/Navbar';
+import Profile from "../pages/profile";
+
+// 🛑 GUEST GUARD: Blocks logged-in operators from viewing Login/Register portals
+function PublicRoute({ children }) {
+  const hardwareToken = localStorage.getItem('access_token');
+  const userId = localStorage.getItem('user_id');
+
+  if (hardwareToken && userId) {
+    // Session is active -> Redirect instantly to prevent route slipping
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  // No session found -> Safe to display the form page
+  return children;
+}
+
+// Layout wrapper that attaches the premium Navbar to specific views
+function DashboardLayout() {
+  return (
+    <>
+      <Navbar />
+      <Outlet />
+    </>
+  );
+}
 
 function AppRoutes() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Open Public Channels */}
-        <Route path="/" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        
-        {/* Enforced Ecosystem View Panels */}
-        <Route 
-          path="/dashboard" 
+        {/* Auth portals now tightly locked down with the PublicRoute Guest Guard */}
+        <Route
+          path="/"
           element={
-            <ProtectedRoute>
-              <Dashboard />
-            </ProtectedRoute>
-          } 
+            <PublicRoute>
+              <Login />
+            </PublicRoute>
+          }
         />
+        <Route
+          path="/login"
+          element={
+            <PublicRoute>
+              <Login />
+            </PublicRoute>
+          }
+        />
+        <Route
+          path="/register"
+          element={
+            <PublicRoute>
+              <Register />
+            </PublicRoute>
+          }
+        />
+
+        {/* Protected layout views with strict authentication boundaries */}
+        <Route element={<DashboardLayout />}>
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+        </Route>
+
+        <Route path="/profile" element={<ProtectedRoute><Profile/></ProtectedRoute>}/>
+
+        {/* Global Fallback Catch-all */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   );

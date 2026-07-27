@@ -1,27 +1,26 @@
-# --- Stage 1: Build Environment ---
-FROM golang:1.26-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
-# Copy the core workspace configurations and shared dependencies
-COPY go.work go.work.sum ./
+# 1. Copy workspace tracker files
+COPY go.work go.work.sum* ./
+
+# 2. Copy ALL workspace modules
 COPY shared/ ./shared/
 COPY services/auth-service/ ./services/auth-service/
+COPY services/user-service/ ./services/user-service/
 
-# Navigate to the service root and compile a highly optimized static binary
+# 3. Sync dependencies 
+RUN go work sync
+
+# 4. Navigate into auth-service and compile binary
 WORKDIR /app/services/auth-service
-RUN go mod download
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o auth-service ./cmd/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o /auth-service ./cmd/main.go
 
-# --- Stage 2: Minimalist Production Image ---
-FROM alpine:3.19
-
-WORKDIR /app
-
-# Copy exclusively the binary and local environment parameters from builder
-COPY --from=builder /app/services/auth-service/auth-service .
-COPY --from=builder /app/services/auth-service/.env .
-
+# Minimal runner container setup
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates
+WORKDIR /
+COPY --from=builder /auth-service /auth-service
 EXPOSE 8001
-
-CMD ["./auth-service"]
+ENTRYPOINT ["/auth-service"]

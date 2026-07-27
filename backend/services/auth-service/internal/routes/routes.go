@@ -13,11 +13,13 @@ func SetupRoutes(r *gin.Engine, authHandler *handlers.AuthHandler) {
 	// Public open endpoints
 	v1.POST("/register", authHandler.Register)
 	v1.POST("/login", authHandler.Login)
+	v1.POST("/refresh", authHandler.Refresh) // Public route: receives the RefreshRequest body
 
 	// Protected Endpoints (Shielded by Day 6 Shared Middleware)
 	protected := r.Group("/api/v1/auth")
 	protected.Use(middleware.AuthMiddleware(os.Getenv("JWT_SECRET")))
 	{
 		protected.GET("/me", authHandler.GetMe)
+		protected.POST("/logout", authHandler.Logout)
 	}
 }

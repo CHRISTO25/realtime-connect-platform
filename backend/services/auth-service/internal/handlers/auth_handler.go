@@ -2,25 +2,29 @@ package handlers
 
 import (
 	"auth-service/internal/dto"
-	"auth-service/internal/services" // Make sure this path matches your service layer
+	"auth-service/internal/services"
 	"errors"
+	"log"
 	"net/http"
 	"shared/response"
 
 	"github.com/gin-gonic/gin"
 )
 
+// AuthHandler serves as the HTTP entry point (Controller) for authentication endpoints.
+// Its sole job is to translate incoming HTTP requests into service calls and map outputs to JSON.
 type AuthHandler struct {
 	authService services.AuthService
 }
 
-// NewAuthHandler initializes the handler with its required dependencies
+// NewAuthHandler injects the business logic dependency (AuthService) into the handler layer.
 func NewAuthHandler(service services.AuthService) *AuthHandler {
 	return &AuthHandler{
 		authService: service,
 	}
 }
 
+// HealthCheck handles GET /health - Used by load balancers and orchestrators to check service availability.
 func (h *AuthHandler) HealthCheck(c *gin.Context) {
 	response.Success(
 		c,
@@ -31,10 +35,12 @@ func (h *AuthHandler) HealthCheck(c *gin.Context) {
 	)
 }
 
+// Register handles POST /api/v1/auth/register
+// Story: Validates payload -> calls service layer to create user and trigger profile sync -> responds with outcome.
 func (h *AuthHandler) Register(c *gin.Context) {
 	var req dto.RegisterRequest
 
-	// 1. Validate incoming JSON against your DTO binding tags
+	// Step 1: Parse and validate JSON request body
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Error(
 			c,
@@ -44,10 +50,10 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// 2. Call the service layer to handle business logic (GORM, Bcrypt, Duplicate checks)
+	// Step 2: Delegate user registration and profile sync execution to the service layer.
 	res, err := h.authService.Register(c.Request.Context(), req)
 	if err != nil {
-		// Catch duplicate email conflict
+		// Handle business domain errors specifically.
 		if errors.Is(err, services.ErrEmailAlreadyExists) {
 			response.Error(
 				c,
@@ -57,16 +63,19 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			return
 		}
 
-		// Catch any other unexpected internal errors (DB down, hashing failure, etc.)
+		// Catch unhandled internal failures and log them
+		log.Printf("[Register Error]: %v", err)
+
+		// 🔑 PASS ACTUAL ERROR TO CLIENT SO WE CAN DIAGNOSE IT IMMEDIATELY
 		response.Error(
 			c,
 			http.StatusInternalServerError,
-			"Internal server error occurred",
+			err.Error(),
 		)
 		return
 	}
 
-	// 3. Return the registered user response via your shared response utility
+	// Step 3: Respond with 200/201 OK and formatted user data.
 	response.Success(
 		c,
 		"User registered successfully",
@@ -75,11 +84,11 @@ func (h *AuthHandler) Register(c *gin.Context) {
 }
 
 // Login handles POST /api/v1/auth/login
-// Senior Refactor: Standardized to use your shared response engine cleanly
+// Story: Validates credentials -> generates access/refresh JWT tokens -> saves refresh session -> returns tokens.
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req dto.LoginRequest
 
-	// 1. Bind and validate the JSON body format structurally
+	// Step 1: Validate payload format.
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Error(
 			c,
@@ -89,10 +98,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// 2. Execute cloud database verification through the service layer
+	// Step 2: Authenticate user credentials and mint JWT session pair.
 	res, err := h.authService.Login(c.Request.Context(), req)
 	if err != nil {
-		// Handle specific credentials mismatch using standard 401 Unauthorized status
 		if errors.Is(err, services.ErrInvalidCredentials) {
 			response.Error(
 				c,
@@ -102,7 +110,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			return
 		}
 
-		// Handle fallback DB errors cleanly without leaking critical context logs
+		log.Printf("[Login Error]: %v", err)
 		response.Error(
 			c,
 			http.StatusInternalServerError,
@@ -111,7 +119,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// 3. Output the successfully minted string-UUID token payload
+	// Step 3: Return access and refresh tokens.
 	response.Success(
 		c,
 		"Login successful",
@@ -120,15 +128,14 @@ func (h *AuthHandler) Login(c *gin.Context) {
 }
 
 // GetMe handles GET /api/v1/auth/me
+// Story: Fetches the authenticated user's credentials using the user_id injected by AuthMiddleware.
 func (h *AuthHandler) GetMe(c *gin.Context) {
-	// Grab the string-UUID user_id that was safely extracted by your shared middleware
 	userID, exists := c.Get("user_id")
 	if !exists {
 		response.Error(c, http.StatusUnauthorized, "Context user unauthorized")
 		return
 	}
 
-	// Dispatch request context down through to your business logic layer
 	res, err := h.authService.GetProfile(c.Request.Context(), userID.(string))
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, err.Error())
@@ -136,4 +143,40 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 	}
 
 	response.Success(c, "User profile retrieved successfully", res)
+}
+
+// Refresh handles POST /api/v1/auth/refresh
+// Story: Rotates expired access tokens using a valid refresh token (Token Reuse Protection enabled).
+func (h *AuthHandler) Refresh(c *gin.Context) {
+	var req dto.RefreshRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, "Invalid request body parameters")
+		return
+	}
+
+	res, err := h.authService.RefreshSession(c.Request.Context(), req)
+	if err != nil {
+		response.Error(c, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	response.Success(c, "Tokens rotated successfully", res)
+}
+
+// Logout handles POST /api/v1/auth/logout
+// Story: Revokes all stored refresh tokens for the active user session.
+func (h *AuthHandler) Logout(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		response.Error(c, http.StatusUnauthorized, "User session state missing")
+		return
+	}
+
+	err := h.authService.Logout(c.Request.Context(), userID.(string))
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "Failed to terminate user session")
+		return
+	}
+
+	response.Success(c, "Logged out successfully from all devices", nil)
 }
