@@ -1,21 +1,27 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
+import { useWebSocket } from "../context/WebSocketContext"; // ⚡ WebSocket Context
 
 export default function Navbar() {
   const location = useLocation();
   const navigate = useNavigate();
-  const dropdownRef = useRef(null);
+  const { logout } = useAuth(); 
   
-  // States for session data, dropdown, and mobile menu toggles
+  // ⚡ Upgraded WebSocket context parameters (connectionStatus support)
+  const { isConnected, connectionStatus, connect } = useWebSocket();
+  
+  const dropdownRef = useRef(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [displayName, setDisplayName] = useState("User");
   const [avatarUrl, setAvatarUrl] = useState("");
   
   const userId = localStorage.getItem('user_id');
   const isActive = (path) => location.pathname === path;
 
-  // Sync user profile details from localStorage
+  // Resolve status state string whether connectionStatus or boolean is present
+  const currentStatus = connectionStatus || (isConnected ? 'CONNECTED' : 'DISCONNECTED');
+
   useEffect(() => {
     const savedName = localStorage.getItem('display_name'); 
     const savedAvatar = localStorage.getItem('avatar_url'); 
@@ -23,7 +29,6 @@ export default function Navbar() {
     if (savedAvatar) setAvatarUrl(savedAvatar);
   }, [location]);
 
-  // Close dropdown menu if clicking outside
   useEffect(() => {
     function handleClickOutside(event) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -34,9 +39,13 @@ export default function Navbar() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setDropdownOpen(false);
-    localStorage.clear();
+    if (logout) {
+      await logout();
+    } else {
+      localStorage.clear();
+    }
     navigate('/login');
   };
 
@@ -58,8 +67,6 @@ export default function Navbar() {
 
       {/* PRIMARY DESKTOP NAVIGATION */}
       <div className="hidden md:flex items-center space-x-1">
-        
-        {/* Dashboard Link */}
         <Link
           to="/dashboard"
           className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
@@ -71,20 +78,38 @@ export default function Navbar() {
           <span>🏠</span> Dashboard
         </Link>
 
-        {/* Chat Platform Link */}
+        {/* ⚡ WEBSOCKET CHAT ROUTE WITH DYNAMIC STATUS DOT */}
         <Link
-          to="/chat"
+          to="/chat-test"
           className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 relative ${
-            isActive("/chat")
+            isActive("/chat-test")
               ? "bg-indigo-500/10 text-indigo-400 border border-indigo-500/30"
               : "text-slate-400 hover:text-white hover:bg-slate-900/60"
           }`}
         >
-          <span>💬</span> Messages & Calls
-          <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span>💬</span> WS Chat
+
+          {/* Tri-state status indicator dot */}
+          {currentStatus === 'CONNECTED' && (
+            <span 
+              className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"
+              title="WebSocket Connected 🟢"
+            ></span>
+          )}
+          {currentStatus === 'CONNECTING' && (
+            <span 
+              className="h-2.5 w-2.5 rounded-full bg-amber-400 animate-ping"
+              title="Establishing Handshake... 🟡"
+            ></span>
+          )}
+          {currentStatus === 'DISCONNECTED' && (
+            <span 
+              className="h-2.5 w-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)]"
+              title="WebSocket Disconnected 🔴"
+            ></span>
+          )}
         </Link>
 
-        {/* Profile Link */}
         <Link
           to="/profile"
           className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
@@ -100,10 +125,44 @@ export default function Navbar() {
       {/* RIGHT ACTION CONTROLS */}
       <div className="flex items-center space-x-3">
 
+        {/* LIVE REALTIME SOCKET STATUS BADGE */}
+        <div className="hidden sm:flex items-center">
+          {currentStatus === 'CONNECTED' && (
+            <div className="flex items-center px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-[10px] font-mono gap-2 text-emerald-400">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span className="font-bold">WS ONLINE</span>
+            </div>
+          )}
+
+          {currentStatus === 'CONNECTING' && (
+            <div className="flex items-center px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[10px] font-mono gap-2 text-amber-400">
+              <svg className="animate-spin h-3 w-3 text-amber-400" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+              </svg>
+              <span className="font-bold">CONNECTING...</span>
+            </div>
+          )}
+
+          {currentStatus === 'DISCONNECTED' && (
+            <button
+              onClick={connect}
+              className="flex items-center px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-[10px] font-mono gap-2 text-slate-400 hover:text-white transition-all cursor-pointer"
+              title="Click to reconnect WebSocket"
+            >
+              <span className="h-2 w-2 rounded-full bg-rose-500"></span>
+              <span>WS OFFLINE (RETRY)</span>
+            </button>
+          )}
+        </div>
+
         {/* CALL SHORTCUTS */}
         <div className="flex items-center space-x-1 bg-slate-900/80 border border-slate-800 p-1 rounded-xl">
           <button
-            onClick={() => navigate('/chat?action=voice')}
+            onClick={() => navigate('/chat-test?action=voice')}
             className="p-2 text-slate-400 hover:text-emerald-400 hover:bg-slate-800/80 rounded-lg transition-all"
             title="Start Voice Call"
           >
@@ -113,7 +172,7 @@ export default function Navbar() {
           </button>
           
           <button
-            onClick={() => navigate('/chat?action=video')}
+            onClick={() => navigate('/chat-test?action=video')}
             className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-slate-800/80 rounded-lg transition-all"
             title="Start Video Call"
           >
@@ -123,7 +182,7 @@ export default function Navbar() {
           </button>
         </div>
 
-        {/* USER AVATAR & NON-DUPLICATE DROPDOWN MENU */}
+        {/* USER AVATAR & DROPDOWN MENU */}
         <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => setDropdownOpen(!dropdownOpen)}
@@ -145,11 +204,8 @@ export default function Navbar() {
             </span>
           </button>
 
-          {/* STREAMLINED DROPDOWN (NO DUPLICATE LINKS) */}
           {dropdownOpen && (
             <div className="absolute right-0 mt-3 w-56 rounded-2xl border border-slate-800 bg-slate-900/95 backdrop-blur-xl p-2 shadow-2xl z-50 space-y-1">
-              
-              {/* Profile Card Header */}
               <div className="px-3 py-2.5 border-b border-slate-800/80 mb-1">
                 <p className="text-sm font-bold text-white truncate">{displayName}</p>
                 <p className="text-[10px] text-slate-500 font-mono truncate">
@@ -157,7 +213,6 @@ export default function Navbar() {
                 </p>
               </div>
 
-              {/* Unique Quick Actions */}
               <button
                 onClick={() => { setDropdownOpen(false); navigate('/profile'); }}
                 className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800/80 transition-all flex items-center justify-between"
@@ -166,7 +221,6 @@ export default function Navbar() {
                 <span className="text-slate-600">→</span>
               </button>
 
-              {/* Logout Button */}
               <div className="pt-1 border-t border-slate-800/80">
                 <button
                   onClick={handleLogout}
@@ -176,7 +230,6 @@ export default function Navbar() {
                   <span>⎋</span>
                 </button>
               </div>
-
             </div>
           )}
         </div>

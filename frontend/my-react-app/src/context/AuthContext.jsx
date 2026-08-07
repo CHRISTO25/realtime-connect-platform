@@ -1,6 +1,7 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import { useDispatch } from 'react-redux';
 import { setUserProfile, logoutUser } from '../store/userSlice';
+import { userApi } from '../services/api/client';
 
 const AuthContext = createContext(null);
 
@@ -11,7 +12,6 @@ export const AuthProvider = ({ children }) => {
   const [userId, setUserId] = useState(localStorage.getItem('user_id') || null);
   const [refreshToken, setRefreshToken] = useState(localStorage.getItem('refresh_token') || null);
 
-  // Sync token state to localStorage
   useEffect(() => {
     if (token) {
       localStorage.setItem('access_token', token);
@@ -36,29 +36,28 @@ export const AuthProvider = ({ children }) => {
     }
   }, [refreshToken]);
 
-  // Robust JWT decoder that safely handles base64url padding
   const decodeJwtUserId = (tokenString) => {
     try {
       if (!tokenString) return null;
-      const base64Url = tokenString.split('.')[1]; 
+      const base64Url = tokenString.split('.')[1];
       if (!base64Url) return null;
-      
+
       let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
       while (base64.length % 4) {
         base64 += '=';
       }
-      
+
       const jsonPayload = decodeURIComponent(
         window.atob(base64)
           .split('')
           .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
           .join('')
       );
-      
+
       const parsed = JSON.parse(jsonPayload);
       return parsed.user_id || parsed.id || null;
     } catch (e) {
-      console.error("JWT Parsing Error:", e);
+      console.error('JWT Parsing Error:', e);
       return null;
     }
   };
@@ -78,20 +77,18 @@ export const AuthProvider = ({ children }) => {
       }
 
       const extractedAccessToken = result?.data?.access_token;
-      const extractedRefreshToken = result?.data?.refresh_token; 
-      
+      const extractedRefreshToken = result?.data?.refresh_token;
+
       if (!extractedAccessToken) {
         throw new Error('Access token absent from response body.');
       }
 
       const extractedUserId = decodeJwtUserId(extractedAccessToken);
 
-      // Update local state
       setToken(extractedAccessToken);
       setUserId(extractedUserId);
       setRefreshToken(extractedRefreshToken || null);
 
-      // ⚡ DISPATCH USER DATA TO REDUX STORE
       dispatch(
         setUserProfile({
           id: extractedUserId,
@@ -100,20 +97,31 @@ export const AuthProvider = ({ children }) => {
         })
       );
 
+      // ⚡ Send immediate heartbeat on login to mark IS_ONLINE = TRUE
+      try {
+        await userApi.post('/heartbeat');
+      } catch (err) {}
+
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
     }
   };
 
-  const logout = () => {
-    setToken(null);
-    setUserId(null);
-    setRefreshToken(null);
-    localStorage.clear();
-
-    // ⚡ RESET REDUX STORE ON LOGOUT
-    dispatch(logoutUser());
+  // ⚡ FIXED LOGOUT: Sends POST /logout BEFORE clearing localStorage!
+  const logout = async () => {
+    try {
+      // Must be called WHILE access_token is still stored!
+      await userApi.post('/logout');
+    } catch (err) {
+      console.warn('Logout API notification skipped:', err);
+    } finally {
+      setToken(null);
+      setUserId(null);
+      setRefreshToken(null);
+      localStorage.clear();
+      dispatch(logoutUser());
+    }
   };
 
   return (

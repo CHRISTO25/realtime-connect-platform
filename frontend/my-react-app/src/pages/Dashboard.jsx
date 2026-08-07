@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { userApi } from '../services/api/client';
 import FriendControl from '../components/FriendControl';
 import BlockedList from '../components/BlockedList';
+import UserCard from '../components/UserCard';
+import ActiveFriendsBar from '../components/ActiveFriendsBar';
 
 // Custom Debounce Hook to avoid API spam on fast typing
 function useDebounce(value, delay = 300) {
@@ -35,8 +37,11 @@ export default function Dashboard() {
   // Infinite Scroll & Pagination States
   const [page, setPage] = useState(1);
   const [hasNext, setHasNext] = useState(false);
-  const [isFetching, setIsFetching] = useState(false);
+  const [isFetchingUI, setIsFetchingUI] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+
+  // ⚡ Ref to maintain stable fetch status without breaking useCallback dependencies
+  const isFetchingRef = useRef(false);
 
   // UI Control & Refresh Signals
   const [actionUserId, setActionUserId] = useState(null);
@@ -54,8 +59,9 @@ export default function Dashboard() {
   // ⚡ SERVER-SIDE SEARCH ENGINE QUERY (/api/v1/users/search)
   const fetchSearchResults = useCallback(
     async (pageNum, query, location, isReset = false) => {
-      if (isFetching && !isReset) return;
-      setIsFetching(true);
+      if (isFetchingRef.current && !isReset) return;
+      isFetchingRef.current = true;
+      setIsFetchingUI(true);
 
       try {
         const res = await userApi.get(
@@ -83,14 +89,15 @@ export default function Dashboard() {
       } catch (err) {
         console.error('Search API failure:', err);
       } finally {
-        setIsFetching(false);
+        isFetchingRef.current = false;
+        setIsFetchingUI(false);
         setInitialLoading(false);
       }
     },
-    [isFetching]
+    []
   );
 
-  // ⚡ FAST AUXILIARY DATA SYNC (Friends & Pending Invites)
+  // ⚡ FAST AUXILIARY DATA SYNC (Friends, Pending Invites & Live Card Online Badges)
   const syncFriendsAndPending = useCallback(async () => {
     try {
       const [friendsRes, pendingRes] = await Promise.allSettled([
@@ -99,8 +106,25 @@ export default function Dashboard() {
       ]);
 
       if (friendsRes.status === 'fulfilled' && friendsRes.value.data?.success) {
-        setFriends(friendsRes.value.data.data || []);
+        const freshFriends = friendsRes.value.data.data || [];
+        setFriends(freshFriends);
+
+        // ⚡ Map friend online status directly to feed cards
+        const friendOnlineMap = new Map(
+          freshFriends.map((f) => [String(f.user_id || f.id), f.is_online])
+        );
+
+        setUsers((prevUsers) =>
+          prevUsers.map((u) => {
+            const uId = String(u.user_id);
+            if (friendOnlineMap.has(uId)) {
+              return { ...u, is_online: friendOnlineMap.get(uId) };
+            }
+            return u;
+          })
+        );
       }
+
       if (pendingRes.status === 'fulfilled' && pendingRes.value.data?.success) {
         setPendingRequests(pendingRes.value.data.data || []);
       }
@@ -109,7 +133,7 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Initial Auth & Polling Setup (Fast 1.5s background polling)
+  // Initial Auth & Polling Setup (Fast 1.5s background polling for live presence)
   useEffect(() => {
     if (!localStorage.getItem('access_token') || !userId) {
       navigate('/login');
@@ -118,7 +142,6 @@ export default function Dashboard() {
 
     syncFriendsAndPending();
 
-    // Fast polling timer for live 2-way sync across browsers
     const interval = setInterval(() => {
       syncFriendsAndPending();
     }, 1500);
@@ -130,19 +153,21 @@ export default function Dashboard() {
   useEffect(() => {
     setPage(1);
     fetchSearchResults(1, debouncedQuery, debouncedLocation, true);
-  }, [debouncedQuery, debouncedLocation]);
+  }, [debouncedQuery, debouncedLocation, fetchSearchResults]);
 
-  // ⚡ INFINITE SCROLL OBSERVER (Auto-loads page 2, 3...)
+  // ⚡ INFINITE SCROLL OBSERVER
   useEffect(() => {
     const target = observerTarget.current;
     if (!target) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && hasNext && !isFetching) {
-          const nextPage = page + 1;
-          setPage(nextPage);
-          fetchSearchResults(nextPage, debouncedQuery, debouncedLocation, false);
+        if (entries[0].isIntersecting && hasNext && !isFetchingRef.current) {
+          setPage((prevPage) => {
+            const nextPage = prevPage + 1;
+            fetchSearchResults(nextPage, debouncedQuery, debouncedLocation, false);
+            return nextPage;
+          });
         }
       },
       { threshold: 0.8 }
@@ -150,16 +175,14 @@ export default function Dashboard() {
 
     observer.observe(target);
     return () => observer.unobserve(target);
-  }, [hasNext, isFetching, page, debouncedQuery, debouncedLocation, fetchSearchResults]);
+  }, [hasNext, debouncedQuery, debouncedLocation, fetchSearchResults]);
 
-  // Status Resolvers
-  const isFriend = (targetId) => friends.some((f) => String(f.user_id || f.id) === String(targetId));
-  const hasInboundRequest = (targetId) => pendingRequests.some((p) => String(p.sender_id) === String(targetId));
-  const hasSentRequest = (targetId) => sentRequests.has(String(targetId));
+  // ⚡ FAST O(1) LOOKUP HASH SETS
+  const friendSet = useMemo(() => new Set(friends.map((f) => String(f.user_id || f.id))), [friends]);
+  const pendingSet = useMemo(() => new Set(pendingRequests.map((p) => String(p.sender_id))), [pendingRequests]);
 
   // ⚡ INSTANT OPTIMISTIC ACTION HANDLERS
-  const handleSendRequest = async (targetId, name) => {
-    // 0ms Latency: Optimistically mark as sent
+  const handleSendRequest = useCallback(async (targetId, name) => {
     setSentRequests((prev) => new Set(prev).add(String(targetId)));
     setActionUserId(targetId);
 
@@ -169,7 +192,6 @@ export default function Dashboard() {
         showToast(`Friend request sent to ${name || 'user'}!`, 'success');
       }
     } catch (err) {
-      // Rollback on error
       setSentRequests((prev) => {
         const next = new Set(prev);
         next.delete(String(targetId));
@@ -179,11 +201,10 @@ export default function Dashboard() {
     } finally {
       setActionUserId(null);
     }
-  };
+  }, [showToast]);
 
-  const handleUnfriend = async (friendId, name) => {
+  const handleUnfriend = useCallback(async (friendId, name) => {
     setActionUserId(friendId);
-    // 0ms Latency: Optimistic remove from active friends
     setFriends((prev) => prev.filter((f) => String(f.user_id || f.id) !== String(friendId)));
     showToast(`Removed ${name || 'user'} from friends`, 'info');
 
@@ -191,23 +212,20 @@ export default function Dashboard() {
       await userApi.post('/friends/unfriend', { friend_id: friendId });
     } catch (err) {
       showToast('Failed to unfriend', 'error');
-      syncFriendsAndPending(); // Rollback
+      syncFriendsAndPending();
     } finally {
       setActionUserId(null);
     }
-  };
+  }, [showToast, syncFriendsAndPending]);
 
-  const handleBlockUser = async (targetId, name) => {
+  const handleBlockUser = useCallback(async (targetId, name) => {
     if (!window.confirm(`Are you sure you want to block ${name || 'this user'}?`)) return;
 
     setActionUserId(targetId);
 
-    // 0ms Latency: Instantly remove user from feed, friends, and pending invites
     setUsers((prev) => prev.filter((u) => String(u.user_id) !== String(targetId)));
     setFriends((prev) => prev.filter((f) => String(f.user_id || f.id) !== String(targetId)));
     setPendingRequests((prev) => prev.filter((p) => String(p.sender_id) !== String(targetId)));
-
-    // Instantly refresh the Blocked Users panel
     setBlockRefreshKey((prev) => prev + 1);
 
     try {
@@ -217,16 +235,16 @@ export default function Dashboard() {
       }
     } catch (err) {
       showToast(err.response?.data?.message || 'Failed to block user', 'error');
-      fetchSearchResults(1, debouncedQuery, debouncedLocation, true); // Rollback
+      fetchSearchResults(1, debouncedQuery, debouncedLocation, true);
     } finally {
       setActionUserId(null);
     }
-  };
+  }, [debouncedQuery, debouncedLocation, fetchSearchResults, showToast]);
 
   return (
     <div className="min-h-screen w-full bg-slate-950 text-slate-100 font-sans pb-20 relative selection:bg-indigo-500 selection:text-white">
       
-      {/* 🔮 ULTRA-SMOOTH TOAST NOTIFICATIONS */}
+      {/* TOAST NOTIFICATIONS */}
       {toast && (
         <div className="fixed top-5 right-5 z-50 animate-bounce">
           <div
@@ -244,53 +262,18 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* 🌟 INSTAGRAM-STYLE "ACTIVE FRIENDS" TOP CAROUSEL */}
-      {friends.length > 0 && (
-        <header className="mx-4 sm:mx-6 pt-6 max-w-7xl lg:mx-auto lg:w-full">
-          <div className="p-4 rounded-2xl border border-slate-800/80 bg-slate-900/60 backdrop-blur-xl space-y-3 shadow-2xl">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-400 font-mono flex items-center gap-2">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                </span>
-                Active Friends ({friends.length})
-              </h3>
-              <span className="text-[10px] text-slate-500 font-mono">LIVE CONNECTED</span>
-            </div>
-
-            <div className="flex items-center gap-5 overflow-x-auto pb-2 scrollbar-none">
-              {friends.map((friend) => (
-                <div key={friend.user_id || friend.id} className="flex flex-col items-center gap-1.5 shrink-0 group cursor-pointer">
-                  <div className="relative p-0.5 rounded-full bg-gradient-to-tr from-emerald-400 via-indigo-500 to-purple-500 shadow-xl transition-all duration-300 group-hover:scale-110">
-                    {friend.avatar_url ? (
-                      <img src={friend.avatar_url} alt={friend.display_name} className="h-14 w-14 rounded-full object-cover border-2 border-slate-950" />
-                    ) : (
-                      <div className="h-14 w-14 rounded-full bg-slate-800 border-2 border-slate-950 flex items-center justify-center font-bold text-white text-sm">
-                        {(friend.display_name || 'F').substring(0, 2).toUpperCase()}
-                      </div>
-                    )}
-                    <span className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full bg-emerald-500 border-2 border-slate-950" />
-                  </div>
-                  <span className="text-[11px] font-semibold text-slate-300 max-w-[80px] truncate text-center group-hover:text-white transition-colors">
-                    {friend.display_name?.split(' ')[0] || 'Friend'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </header>
-      )}
+      {/* MEMOIZED ACTIVE FRIENDS CAROUSEL */}
+      <ActiveFriendsBar friends={friends} />
 
       {/* MAIN LAYOUT */}
       <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
         
-        {/* LEFT COLUMN: REAL-TIME DEBOUNCED SEARCH + CONTROL PANELS */}
+        {/* LEFT COLUMN: SEARCH + CONTROL CENTERS */}
         <section className="lg:col-span-4 space-y-6">
           <div className="rounded-2xl border border-slate-800/80 bg-slate-900/50 backdrop-blur-xl p-5 flex flex-col h-fit shadow-2xl space-y-4">
             <h3 className="text-xs font-bold uppercase tracking-wider font-mono text-slate-200 flex items-center justify-between pb-2 border-b border-slate-800">
               <span>🔍 Real-Time Search Engine</span>
-              {isFetching && <span className="text-[10px] text-indigo-400 animate-pulse font-bold">Querying...</span>}
+              {isFetchingUI && <span className="text-[10px] text-indigo-400 animate-pulse font-bold">Querying...</span>}
             </h3>
 
             <div className="space-y-3">
@@ -332,14 +315,12 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Pending Invites Control Panel */}
           <FriendControl
             pendingRequests={pendingRequests}
             setPendingRequests={setPendingRequests}
             onRequestProcessed={syncFriendsAndPending}
           />
 
-          {/* Blocked List Control Panel */}
           <BlockedList
             refreshKey={blockRefreshKey}
             onUnblocked={() => {
@@ -371,109 +352,19 @@ export default function Dashboard() {
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
                 {users.length > 0 ? (
-                  users.map((user) => {
-                    const userIsFriend = isFriend(user.user_id);
-                    const userHasInboundReq = hasInboundRequest(user.user_id);
-                    const userHasSentReq = hasSentRequest(user.user_id);
-
-                    return (
-                      <div
-                        key={user.user_id}
-                        className={`group rounded-2xl border bg-slate-900/40 backdrop-blur-xl overflow-hidden transition-all duration-300 flex flex-col justify-between hover:shadow-2xl ${
-                          userIsFriend ? 'border-emerald-500/40 bg-slate-900/70' : 'border-slate-800/80 hover:border-slate-700'
-                        }`}
-                      >
-                        {/* COVER BANNER */}
-                        <div className="relative h-24 w-full bg-slate-950 overflow-hidden">
-                          {user.cover_url ? (
-                            <img src={user.cover_url} alt="Cover" className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
-                          ) : (
-                            <div className="w-full h-full bg-gradient-to-r from-indigo-950 via-purple-950 to-slate-950 opacity-90" />
-                          )}
-                          <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-transparent to-transparent opacity-80" />
-                        </div>
-
-                        {/* BODY DETAILS */}
-                        <div className="px-5 pb-4 pt-1 relative flex-1 flex flex-col justify-between">
-                          <div>
-                            <div className="flex items-end justify-between -mt-10 mb-3">
-                              <div className="relative">
-                                <div
-                                  className={`p-0.5 rounded-2xl bg-gradient-to-tr ${
-                                    userIsFriend ? 'from-emerald-400 to-indigo-500' : 'from-indigo-500 to-pink-500'
-                                  } shadow-xl`}
-                                >
-                                  {user.avatar_url ? (
-                                    <img src={user.avatar_url} alt={user.display_name} className="h-14 w-14 rounded-2xl object-cover border-2 border-slate-900 bg-slate-950" />
-                                  ) : (
-                                    <div className="h-14 w-14 rounded-2xl border-2 border-slate-900 bg-slate-950 flex items-center justify-center font-black text-white text-sm">
-                                      {(user.display_name || 'U').substring(0, 2).toUpperCase()}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-
-                              <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded-full border border-slate-800 bg-slate-950/80 text-slate-300">
-                                📍 {user.location || 'Worldwide'}
-                              </span>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <h4 className="text-base font-bold tracking-tight text-white group-hover:text-indigo-400 transition-colors">
-                                {user.display_name || 'Anonymous User'}
-                              </h4>
-                              {userIsFriend && (
-                                <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                                  ✓ Friend
-                                </span>
-                              )}
-                            </div>
-
-                            <p className="text-xs mt-1.5 leading-relaxed text-slate-400 line-clamp-2">
-                              {user.bio || 'No bio provided.'}
-                            </p>
-                          </div>
-
-                          {/* DYNAMIC ACTION FOOTER */}
-                          <div className="mt-5 pt-3 border-t border-slate-800/80 flex items-center justify-between">
-                            <button
-                              onClick={() => handleBlockUser(user.user_id, user.display_name)}
-                              disabled={actionUserId === user.user_id}
-                              className="text-[11px] font-bold text-slate-500 hover:text-red-400 transition-colors flex items-center gap-1"
-                            >
-                              🚫 Block
-                            </button>
-
-                            {userIsFriend ? (
-                              <button
-                                onClick={() => handleUnfriend(user.user_id, user.display_name)}
-                                disabled={actionUserId === user.user_id}
-                                className="px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-300 hover:text-red-400 hover:bg-red-950/40 border border-slate-800 hover:border-red-900/50 transition-all active:scale-95"
-                              >
-                                Unfriend
-                              </button>
-                            ) : userHasSentReq ? (
-                              <button disabled className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-slate-800 text-indigo-400 border border-indigo-500/30 opacity-90">
-                                ⏳ Request Sent
-                              </button>
-                            ) : userHasInboundReq ? (
-                              <span className="text-[11px] font-mono text-amber-400 font-bold bg-amber-950/40 px-2.5 py-1 rounded-xl border border-amber-500/30">
-                                📩 Pending Invite
-                              </span>
-                            ) : (
-                              <button
-                                onClick={() => handleSendRequest(user.user_id, user.display_name)}
-                                disabled={actionUserId === user.user_id}
-                                className="px-4 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg active:scale-95 disabled:opacity-50 transition-all"
-                              >
-                                {actionUserId === user.user_id ? 'Sending...' : '+ Add Friend'}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })
+                  users.map((user) => (
+                    <UserCard
+                      key={user.user_id}
+                      user={user}
+                      isFriend={friendSet.has(String(user.user_id))}
+                      hasInboundReq={pendingSet.has(String(user.user_id))}
+                      hasSentReq={sentRequests.has(String(user.user_id))}
+                      actionUserId={actionUserId}
+                      onSendRequest={handleSendRequest}
+                      onUnfriend={handleUnfriend}
+                      onBlockUser={handleBlockUser}
+                    />
+                  ))
                 ) : (
                   <div className="col-span-full py-16 rounded-2xl border border-dashed border-slate-800 text-center font-mono text-xs text-slate-500 bg-slate-900/20">
                     No members match your search criteria.
@@ -481,9 +372,9 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {/* ⚡ INFINITE SCROLL OBSERVER TARGET */}
+              {/* INFINITE SCROLL OBSERVER TARGET */}
               <div ref={observerTarget} className="py-6 flex justify-center items-center">
-                {isFetching && page > 1 && (
+                {isFetchingUI && page > 1 && (
                   <div className="flex items-center gap-2 text-xs font-mono text-indigo-400 animate-pulse">
                     <div className="h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
                     Loading next page...

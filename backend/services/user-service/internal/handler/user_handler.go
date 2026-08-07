@@ -201,3 +201,52 @@ func (h *UserHandler) SearchUsers(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": res})
 }
+
+// POST /api/v1/users/logout
+func (h *UserHandler) Logout(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Unauthorized"})
+		return
+	}
+
+	// ⚡ Mark user as offline in database upon sign-out
+	if err := h.userService.UpdateStatus(c.Request.Context(), userID.(string), false); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Logged out successfully"})
+}
+
+// POST /api/v1/users/heartbeat
+func (h *UserHandler) Heartbeat(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Unauthorized"})
+		return
+	}
+
+	// Sets is_online = true and updates last_seen = NOW()
+	if err := h.userService.UpdateStatus(c.Request.Context(), userID.(string), true); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// POST /api/v1/users/presence/offline (Called by navigator.sendBeacon when closing tab)
+func (h *UserHandler) MarkOffline(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		// If sent via Beacon token parameter or query fallback
+		userID = c.Query("user_id")
+	}
+
+	if userID != "" {
+		_ = h.userService.UpdateStatus(c.Request.Context(), userID.(string), false)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}

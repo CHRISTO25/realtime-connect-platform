@@ -17,6 +17,14 @@ func NewFriendService(repo repository.FriendRepository) FriendService {
 	return &FriendServiceImpl{repo: repo}
 }
 
+// ⚡ Helper: User is ONLY online if is_online == true AND last_seen was within 20 seconds
+func isFriendActive(isOnline bool, lastSeen time.Time) bool {
+	if !isOnline {
+		return false
+	}
+	return time.Since(lastSeen) <= 20*time.Second
+}
+
 func (s *FriendServiceImpl) SendRequest(ctx context.Context, senderID, receiverID string) error {
 	if senderID == receiverID {
 		return errors.New("cannot send friend request to yourself")
@@ -95,8 +103,18 @@ func (s *FriendServiceImpl) GetPendingRequests(ctx context.Context, userID strin
 	return res, nil
 }
 
+// ⚡ Single, Clean Implementation of GetFriendsList with dynamic heartbeat checking
 func (s *FriendServiceImpl) GetFriendsList(ctx context.Context, userID string) ([]model.UserProfile, error) {
-	return s.repo.GetFriends(ctx, userID)
+	friends, err := s.repo.GetFriends(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range friends {
+		friends[i].IsOnline = isFriendActive(friends[i].IsOnline, friends[i].LastSeen)
+	}
+
+	return friends, nil
 }
 
 func (s *FriendServiceImpl) Unfriend(ctx context.Context, userID, friendID string) error {

@@ -1,12 +1,17 @@
 import React from "react";
 import { AuthProvider } from "./context/AuthContext"; 
-import AppRoutes from "./routes/AppRoutes"; // Aligned to your exact directory tree!
+import { ToastProvider } from "./context/ToastContext";
+import AppRoutes from "./routes/AppRoutes";
+import PresenceTracker from "./components/PresenceTracker"; // 👈 IMPORT HERE
 
 function App() {
   return (
-    <AuthProvider>
-      <AppRoutes />
-    </AuthProvider>
+    <ToastProvider>
+      <AuthProvider>
+        <PresenceTracker /> {/* ⚡ AUTOMATIC REAL-TIME PRESENCE ENGINE */}
+        <AppRoutes />
+      </AuthProvider>
+    </ToastProvider>
   );
 }
 

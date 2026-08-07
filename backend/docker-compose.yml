@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # 1. Local Cache Hub for Chat WebSocket Sessions
   redis:
@@ -23,13 +21,13 @@ services:
     ports:
       - "8001:8001"
     env_file:
-      - ./services/auth-service/.env  # ◄ Reads isolated auth vars locally
+      - ./services/auth-service/.env
     depends_on:
       - redis
     networks:
       - app_network
 
-  # 3. Containerized Go User Profile Microservice (DAY 9 WORKSPACE EXTENSION)
+  # 3. Containerized Go User Profile Microservice
   user-service:
     build:
       context: .
@@ -39,7 +37,23 @@ services:
     ports:
       - "8002:8002"
     env_file:
-      - ./services/user-service/.env  # ◄ Reads isolated user vars locally
+      - ./services/user-service/.env
+    networks:
+      - app_network
+
+  # 4. Containerized Go Realtime Chat Microservice
+  chat-service:
+    build:
+      context: .
+      dockerfile: services/chat-service/Dockerfile
+    container_name: chat_service_api
+    restart: always
+    ports:
+      - "8003:8003"
+    env_file:
+      - ./services/chat-service/.env
+    depends_on:
+      - redis
     networks:
       - app_network
 

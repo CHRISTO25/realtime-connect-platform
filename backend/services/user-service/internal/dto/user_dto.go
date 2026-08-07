@@ -26,6 +26,7 @@ type UserListItemResponse struct {
 	Location    string `json:"location"`
 	AvatarURL   string `json:"avatar_url"`
 	CoverURL    string `json:"cover_url"`
+	IsOnline    bool   `json:"is_online"` // 👈 ADD THIS FIELD!
 	IsFollowing bool   `json:"is_following"`
 }
 

@@ -5,6 +5,7 @@ import Dashboard from "../pages/Dashboard";
 import ProtectedRoute from "./ProtectedRoute";
 import Navbar from '../components/Navbar';
 import Profile from "../pages/profile";
+import ChatDashboard from "../pages/ChatDashboard"; // 👈 Day 15 Component
 
 // 🛑 GUEST GUARD: Blocks logged-in operators from viewing Login/Register portals
 function PublicRoute({ children }) {
@@ -34,7 +35,7 @@ function AppRoutes() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Auth portals now tightly locked down with the PublicRoute Guest Guard */}
+        {/* Auth portals tightly locked down with the PublicRoute Guest Guard */}
         <Route
           path="/"
           element={
@@ -60,19 +61,20 @@ function AppRoutes() {
           }
         />
 
-        {/* Protected layout views with strict authentication boundaries */}
-        <Route element={<DashboardLayout />}>
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <Dashboard />
-              </ProtectedRoute>
-            }
-          />
+        {/* Protected layout views with standard Navbar and Auth Guard */}
+        <Route
+          element={
+            <ProtectedRoute>
+              <DashboardLayout />
+            </ProtectedRoute>
+          }
+        >
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/profile" element={<Profile />} />
+          
+          {/* ⚡ Day 15: WebSocket Connection Test Route */}
+          <Route path="/chat-test" element={<ChatDashboard />} />
         </Route>
-
-        <Route path="/profile" element={<ProtectedRoute><Profile/></ProtectedRoute>}/>
 
         {/* Global Fallback Catch-all */}
         <Route path="*" element={<Navigate to="/" replace />} />

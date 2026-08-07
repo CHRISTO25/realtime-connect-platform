@@ -14,5 +14,6 @@ type UserService interface {
 	UploadCover(ctx context.Context, userID string, fileHeader *multipart.FileHeader) (*dto.UserProfileResponse, error)
 	GetAllProfiles(ctx context.Context, currentUserID string, page, perPage int) (*dto.GetAllUserResponse, error)
 	// ⚡ DAY 12: Search Interface
+	UpdateStatus(ctx context.Context, userID string, isOnline bool) error
 	SearchUsers(ctx context.Context, currentUserID string, req *dto.SearchUsersRequest) (*dto.PaginatedUsersResponse, error)
 }

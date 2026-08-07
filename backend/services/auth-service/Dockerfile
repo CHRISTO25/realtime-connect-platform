@@ -5,10 +5,11 @@ WORKDIR /app
 # 1. Copy workspace tracker files
 COPY go.work go.work.sum* ./
 
-# 2. Copy ALL workspace modules
+# 2. Copy ALL workspace modules registered in go.work
 COPY shared/ ./shared/
 COPY services/auth-service/ ./services/auth-service/
 COPY services/user-service/ ./services/user-service/
+COPY services/chat-service/ ./services/chat-service/
 
 # 3. Sync dependencies 
 RUN go work sync

@@ -11,6 +11,7 @@ func SetupRoutes(router *gin.Engine, h *handler.UserHandler, friendH *handler.Fr
 	{
 		v1.POST("/internal/init", h.InitProfile)
 		v1.GET("/profile/:id", h.GetProfile)
+		v1.POST("/presence/offline/beacon", h.MarkOffline) // Public endpoint for Beacon API on tab exit
 
 		protected := v1.Group("")
 		protected.Use(middleware.AuthMiddleware(jwtSecret))
@@ -20,6 +21,9 @@ func SetupRoutes(router *gin.Engine, h *handler.UserHandler, friendH *handler.Fr
 			protected.POST("/profile/cover", h.UploadCover)   // ◄ COVER UPLOAD ROUTE
 			protected.GET("/allProfile", h.GetallUsers)
 			protected.GET("/search", h.SearchUsers)
+			protected.POST("/logout", h.Logout)
+			protected.POST("/heartbeat", h.Heartbeat)
+			protected.POST("/presence/offline", h.MarkOffline)
 
 			protected.POST("/friends/request", friendH.SendRequest)
 			protected.POST("/friends/accept", friendH.AcceptRequest)
@@ -32,6 +36,7 @@ func SetupRoutes(router *gin.Engine, h *handler.UserHandler, friendH *handler.Fr
 			protected.DELETE("/block/:id", blockH.UnblockUser)
 			protected.GET("/block/list", blockH.GetBlockedList)
 			protected.GET("/block/ids", blockH.GetBlockedIDs)
+
 		}
 	}
 }

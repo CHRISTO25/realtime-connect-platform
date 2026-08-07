@@ -23,10 +23,14 @@ func (r *ProfileRepositoryImpl) CreateProfile(ctx context.Context, profile *mode
 	return r.db.WithContext(ctx).Create(profile).Error
 }
 
-// FindByUserID queries by the foreign key column 'user_id' (Auth Service UUID)
+// FindByUserID queries by the indexed unique column 'user_id'
 func (r *ProfileRepositoryImpl) FindByUserID(ctx context.Context, userIDStr string) (*model.UserProfile, error) {
 	var profile model.UserProfile
-	err := r.db.WithContext(ctx).Where("user_id = ?", userIDStr).First(&profile).Error
+	err := r.db.WithContext(ctx).
+		Select("id, user_id, display_name, bio, location, avatar_url, cover_url, is_online, last_seen, created_at, updated_at").
+		Where("user_id = ?", userIDStr).
+		First(&profile).Error
+
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			// 🛡️ SELF-HEAL: If row was missed during registration sync, auto-seed it now!
@@ -52,14 +56,13 @@ func (r *ProfileRepositoryImpl) FindByUserID(ctx context.Context, userIDStr stri
 	return &profile, nil
 }
 
-// GetProfileByID queries by user_id column to match the auth service user ID seamlessly
+// GetProfileByID delegates to FindByUserID
 func (r *ProfileRepositoryImpl) GetProfileByID(ctx context.Context, id string) (*model.UserProfile, error) {
 	return r.FindByUserID(ctx, id)
 }
 
-// UpdateProfile saves updated profile metadata
+// UpdateProfile saves updated profile metadata using atomic column updates
 func (r *ProfileRepositoryImpl) UpdateProfile(ctx context.Context, profile *model.UserProfile) error {
-	// 🛡️ Model(&model.UserProfile{}) tells GORM which table/model to update
 	return r.db.WithContext(ctx).
 		Model(&model.UserProfile{}).
 		Where("user_id = ?", profile.UserID).
@@ -73,17 +76,7 @@ func (r *ProfileRepositoryImpl) UpdateProfile(ctx context.Context, profile *mode
 		}).Error
 }
 
-// UpdateStatus updates online presence by user_id
-func (r *ProfileRepositoryImpl) UpdateStatus(ctx context.Context, userIDStr string, isOnline bool) error {
-	return r.db.WithContext(ctx).Model(&model.UserProfile{}).
-		Where("user_id = ?", userIDStr).
-		Updates(map[string]interface{}{
-			"is_online": isOnline,
-			"last_seen": time.Now(),
-		}).Error
-}
-
-// GetAllProfilesPaginated returns all user profiles excluding the logged-in user
+// GetAllProfilesPaginated returns all user profiles with projection selection
 func (r *ProfileRepositoryImpl) GetAllProfilesPaginated(ctx context.Context, excludeUserID string, offset, limit int) ([]model.UserProfile, int64, error) {
 	var profiles []model.UserProfile
 	var totalCount int64
@@ -94,14 +87,20 @@ func (r *ProfileRepositoryImpl) GetAllProfilesPaginated(ctx context.Context, exc
 		query = query.Where("user_id != ?", excludeUserID)
 	}
 
-	// Execute Count
+	// 1. Fast Index-backed Count
 	if err := query.Count(&totalCount).Error; err != nil {
 		log.Printf("[Neon DB Query Error - Count]: %v", err)
 		return nil, 0, err
 	}
 
-	// Execute Paginated Fetch
-	err := query.Offset(offset).Limit(limit).Order("created_at desc").Find(&profiles).Error
+	// 2. Paginated Fetch with Projection (Avoids SELECT *)
+	err := query.
+		Select("id, user_id, display_name, bio, location, avatar_url, cover_url, is_online, last_seen, created_at").
+		Offset(offset).
+		Limit(limit).
+		Order("created_at DESC").
+		Find(&profiles).Error
+
 	if err != nil {
 		log.Printf("[Neon DB Query Error - Find]: %v", err)
 		return nil, 0, err
@@ -110,18 +109,18 @@ func (r *ProfileRepositoryImpl) GetAllProfilesPaginated(ctx context.Context, exc
 	return profiles, totalCount, nil
 }
 
-// SearchProfiles queries profiles using server-side ILIKE filters & automatic 2-way block exclusion
+// SearchProfiles uses projection, indexed ILIKE matching, and fast subquery 2-way block exclusion
 func (r *ProfileRepositoryImpl) SearchProfiles(ctx context.Context, currentUserID string, searchQuery, locationQuery string, offset, limit int) ([]model.UserProfile, int64, error) {
 	var profiles []model.UserProfile
 	var totalCount int64
 
 	dbQuery := r.db.WithContext(ctx).Model(&model.UserProfile{})
 
-	// 1. Exclude current logged-in user
+	// 1. Exclude current logged-in user & 2-way blocked users using indexed subquery
 	if currentUserID != "" {
 		dbQuery = dbQuery.Where("user_id != ?", currentUserID)
 
-		// 2. Subquery to automatically exclude bidirectional blocked users
+		// High-performance subquery utilizing composite index on blocked_users(blocker_id, blocked_id)
 		blockedSubQuery := r.db.Model(&model.BlockedUser{}).
 			Select("CASE WHEN blocker_id = ? THEN blocked_id ELSE blocker_id END", currentUserID).
 			Where("blocker_id = ? OR blocked_id = ?", currentUserID, currentUserID)
@@ -129,25 +128,25 @@ func (r *ProfileRepositoryImpl) SearchProfiles(ctx context.Context, currentUserI
 		dbQuery = dbQuery.Where("user_id NOT IN (?)", blockedSubQuery)
 	}
 
-	// 3. Search query filter (Case-insensitive matching for display name or bio)
+	// 2. Case-insensitive Search Filters
 	if searchQuery != "" {
 		pattern := "%" + searchQuery + "%"
 		dbQuery = dbQuery.Where("display_name ILIKE ? OR bio ILIKE ?", pattern, pattern)
 	}
 
-	// 4. Location query filter
 	if locationQuery != "" {
 		locPattern := "%" + locationQuery + "%"
 		dbQuery = dbQuery.Where("location ILIKE ?", locPattern)
 	}
 
-	// 5. Total Count matching filters
+	// 3. Count total matching rows
 	if err := dbQuery.Count(&totalCount).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// 6. Paginated Query Execution
+	// 4. Execute Paginated Fetch with Column Projection for maximum throughput
 	err := dbQuery.
+		Select("id, user_id, display_name, bio, location, avatar_url, cover_url, is_online, last_seen, created_at").
 		Offset(offset).
 		Limit(limit).
 		Order("created_at DESC").
@@ -158,4 +157,14 @@ func (r *ProfileRepositoryImpl) SearchProfiles(ctx context.Context, currentUserI
 	}
 
 	return profiles, totalCount, nil
+}
+
+func (r *ProfileRepositoryImpl) UpdateStatus(ctx context.Context, userIDStr string, isOnline bool) error {
+	return r.db.WithContext(ctx).
+		Model(&model.UserProfile{}).
+		Where("user_id = ?", userIDStr).
+		Updates(map[string]interface{}{
+			"is_online": isOnline,
+			"last_seen": time.Now(),
+		}).Error
 }
