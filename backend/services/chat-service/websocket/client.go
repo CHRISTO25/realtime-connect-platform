@@ -94,7 +94,7 @@ func (c *Client) ReadPump() {
 
 			receiptOutbound := WSOutgoingFrame{
 				Type:      frame.Type,
-				ID:        frame.Content, // Message ID being acknowledged stored in Content property
+				ID:        frame.Content, // Target Message ID being acknowledged
 				RoomID:    roomID,
 				SenderID:  c.UserID,
 				Timestamp: time.Now(),

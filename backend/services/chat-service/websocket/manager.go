@@ -1,12 +1,13 @@
 package websocket
 
 import (
-	"chat-service/internal/config"
 	"context"
 	"encoding/json"
 	"log"
 	"sync"
 	"time"
+
+	"chat-service/internal/config"
 )
 
 type Manager struct {
@@ -22,26 +23,14 @@ func NewManager() *Manager {
 	return &Manager{
 		Clients:      make(map[*Client]bool),
 		UserRegistry: make(map[string]map[*Client]bool),
-		Broadcast:    make(chan []byte, 256),
+		Broadcast:    make(chan []byte, 512), // Buffered high-throughput channel
 		Register:     make(chan *Client),
 		Unregister:   make(chan *Client),
 	}
 }
 
-// 🟢 GetOnlineUsers returns a slice of active connected user IDs
-func (m *Manager) GetOnlineUsers() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	users := make([]string, 0, len(m.UserRegistry))
-	for userID := range m.UserRegistry {
-		users = append(users, userID)
-	}
-	return users
-}
-
 func (m *Manager) Run() {
-	log.Println("🟢 [Connection Manager] Socket Registry & Redis Presence Engine Online")
+	log.Println("🟢 [Concurrency Engine] High-Throughput Manager Loop Active")
 	ctx := context.Background()
 
 	for {
@@ -55,14 +44,13 @@ func (m *Manager) Run() {
 			m.UserRegistry[client.UserID][client] = true
 			m.mu.Unlock()
 
-			// ⚡ Set User Online in Redis with 30s TTL
 			if config.RedisClient != nil {
 				_ = config.RedisClient.Set(ctx, "user:online:"+client.UserID, "true", 30*time.Second).Err()
 			}
 
 			ackMsg, _ := json.Marshal(WSOutgoingFrame{
 				Type:      "CONNECTION_ESTABLISHED",
-				Content:   "Successfully connected to Redis Presence Hub",
+				Content:   "Successfully connected to Concurrency Hub",
 				Timestamp: time.Now(),
 			})
 			client.Send <- ackMsg
@@ -76,7 +64,6 @@ func (m *Manager) Run() {
 					delete(userSockets, client)
 					if len(userSockets) == 0 {
 						delete(m.UserRegistry, client.UserID)
-						// ⚡ Remove or let Redis key expire
 						if config.RedisClient != nil {
 							_ = config.RedisClient.Del(ctx, "user:online:"+client.UserID).Err()
 						}
@@ -86,16 +73,30 @@ func (m *Manager) Run() {
 			m.mu.Unlock()
 
 		case data := <-m.Broadcast:
+			// Concurrent RLock allows parallel reads across thousands of connected client sockets
 			m.mu.RLock()
 			for client := range m.Clients {
 				select {
 				case client.Send <- data:
 				default:
-					close(client.Send)
-					delete(m.Clients, client)
+					// Non-blocking write fallback if a client buffer fills up
+					go func(cl *Client) {
+						m.Unregister <- cl
+					}(client)
 				}
 			}
 			m.mu.RUnlock()
 		}
 	}
+}
+
+func (m *Manager) GetOnlineUsers() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	users := make([]string, 0, len(m.UserRegistry))
+	for userID := range m.UserRegistry {
+		users = append(users, userID)
+	}
+	return users
 }

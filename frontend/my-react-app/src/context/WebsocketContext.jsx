@@ -3,10 +3,12 @@ import React, { createContext, useContext, useEffect, useState, useRef, useCallb
 const WebSocketContext = createContext(null);
 
 export const WebSocketProvider = ({ children }) => {
-  const [connectionStatus, setConnectionStatus] = useState('DISCONNECTED'); // CONNECTED | CONNECTING | DISCONNECTED
+  const [connectionStatus, setConnectionStatus] = useState('DISCONNECTED'); // CONNECTED | CONNECTING | DISCONNECTED | RECONNECTING
   const [messages, setMessages] = useState([]);
+  
   const socketRef = useRef(null);
   const reconnectTimerRef = useRef(null);
+  const reconnectAttemptsRef = useRef(0); // ⚡ Track progressive retry count
 
   const connect = useCallback(() => {
     const token = localStorage.getItem('access_token');
@@ -26,6 +28,7 @@ export const WebSocketProvider = ({ children }) => {
     ws.onopen = () => {
       console.log('🟢 [WebSocket] Connected to Chat Service Hub');
       setConnectionStatus('CONNECTED');
+      reconnectAttemptsRef.current = 0; // ⚡ Reset backoff counter on successful handshake
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -52,12 +55,19 @@ export const WebSocketProvider = ({ children }) => {
       setConnectionStatus('DISCONNECTED');
       socketRef.current = null;
 
-      // Auto reconnect
+      // ⚡ EXPONENTIAL BACKOFF RECONNECTION LOGIC
       if (localStorage.getItem('access_token')) {
+        const attempts = reconnectAttemptsRef.current;
+        // Formula: min(30000, 1000 * 2^attempts) -> 1s, 2s, 4s, 8s, 16s, capped at 30s
+        const delay = Math.min(30000, 1000 * Math.pow(2, attempts));
+        reconnectAttemptsRef.current += 1;
+
+        console.log(`🔄 [WebSocket] Reconnecting in ${delay}ms (Attempt #${reconnectAttemptsRef.current})...`);
+        setConnectionStatus(`RECONNECTING (${reconnectAttemptsRef.current})`);
+
         reconnectTimerRef.current = setTimeout(() => {
-          console.log('🔄 Attempting WebSocket auto-reconnect...');
           connect();
-        }, 3000);
+        }, delay);
       }
     };
 
@@ -67,12 +77,14 @@ export const WebSocketProvider = ({ children }) => {
   const disconnect = useCallback(() => {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
     }
     if (socketRef.current) {
       socketRef.current.close();
       socketRef.current = null;
     }
     setConnectionStatus('DISCONNECTED');
+    reconnectAttemptsRef.current = 0;
   }, []);
 
   const sendMessage = useCallback((payload) => {
@@ -96,7 +108,7 @@ export const WebSocketProvider = ({ children }) => {
     <WebSocketContext.Provider
       value={{
         connectionStatus,
-        isConnected: connectionStatus === 'CONNECTED', // 🟢 CRITICAL: Export boolean flag
+        isConnected: connectionStatus === 'CONNECTED',
         messages,
         sendMessage,
         connect,
