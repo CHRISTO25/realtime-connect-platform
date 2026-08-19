@@ -2,12 +2,15 @@ package handler
 
 import (
 	"net/http"
-	"shared/jwt"
-	"shared/response"
+	"os"
+
+	"shared.local/jwt"
+	"shared.local/response"
 
 	"chat-service/internal/dto"
 	"chat-service/internal/model"
 	"chat-service/internal/service"
+	"chat-service/internal/utils"
 	"chat-service/websocket"
 
 	"github.com/gin-gonic/gin"
@@ -18,13 +21,27 @@ type ChatHandler struct {
 	jwtSecret   string
 	manager     *websocket.Manager
 	chatService service.ChatService
+	userClient  *utils.UserServiceClient // ⚡ Day 35: Inter-service REST client
+	nodeID      string
 }
 
-func NewChatHandler(jwtSecret string, manager *websocket.Manager, chatService service.ChatService) *ChatHandler {
+func NewChatHandler(
+	jwtSecret string,
+	manager *websocket.Manager,
+	chatService service.ChatService,
+	userClient *utils.UserServiceClient,
+) *ChatHandler {
+	nodeID := os.Getenv("NODE_ID")
+	if nodeID == "" {
+		nodeID = "chat-node-primary"
+	}
+
 	return &ChatHandler{
 		jwtSecret:   jwtSecret,
 		manager:     manager,
 		chatService: chatService,
+		userClient:  userClient,
+		nodeID:      nodeID,
 	}
 }
 
@@ -68,6 +85,46 @@ func (h *ChatHandler) ServeWS(c *gin.Context) {
 	go client.ReadPump()
 }
 
+// ⚡ Day 38 / Gateway Health Check Endpoint
+func (h *ChatHandler) HealthCheck(c *gin.Context) {
+	onlineCount := 0
+	var onlineUsers []string
+
+	if h.manager != nil {
+		onlineCount = len(h.manager.Clients)
+		onlineUsers = h.manager.GetOnlineUsers()
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":       "UP",
+		"service":      "chat-service",
+		"node_id":      h.nodeID,
+		"online_count": onlineCount,
+		"online_users": onlineUsers,
+	})
+}
+
+// ⚡ Day 35: Inter-Service Room Details with Graceful Degradation
+// GET /api/v1/chat/room/:userId
+func (h *ChatHandler) GetRoomDetails(c *gin.Context) {
+	targetUserID := c.Param("userId")
+	if targetUserID == "" {
+		response.Error(c, http.StatusBadRequest, "User ID parameter is mandatory")
+		return
+	}
+
+	// Make internal synchronous call to user-service with 2s circuit timeout
+	profile, _ := h.userClient.GetUserProfile(c.Request.Context(), targetUserID)
+
+	resp := dto.RoomDetailsResponse{
+		RoomID:      "room_" + targetUserID,
+		Participant: profile,
+		Degraded:    profile.IsDegraded,
+	}
+
+	response.Success(c, "Room details loaded", resp)
+}
+
 func (h *ChatHandler) GetRoomHistory(c *gin.Context) {
 	roomID := c.Param("room_id")
 	if roomID == "" {
@@ -81,23 +138,6 @@ func (h *ChatHandler) GetRoomHistory(c *gin.Context) {
 	}
 
 	response.Success(c, "Room history retrieved", res)
-}
-
-func (h *ChatHandler) HealthCheck(c *gin.Context) {
-	onlineCount := 0
-	var onlineUsers []string
-
-	if h.manager != nil {
-		onlineCount = len(h.manager.Clients)
-		onlineUsers = h.manager.GetOnlineUsers()
-	}
-
-	response.Success(c, "Chat Service operational", gin.H{
-		"status":       "online",
-		"online_count": onlineCount,
-		"online_users": onlineUsers,
-		"ws_url":       "ws://localhost:8003/ws",
-	})
 }
 
 // CreateGroupRoom handles POST /api/v1/chat/rooms

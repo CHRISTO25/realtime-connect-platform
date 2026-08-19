@@ -18,9 +18,11 @@ func NewUserHandler(userService service.UserService) *UserHandler {
 	return &UserHandler{userService: userService}
 }
 
+// ⚡ Added Email field here to match the incoming payload
 type InitProfileRequest struct {
 	UserID      string `json:"user_id" binding:"required"`
 	DisplayName string `json:"display_name" binding:"required"`
+	Email       string `json:"email"`
 }
 
 // 1. Internal Profile Initialization Bridge
@@ -35,7 +37,8 @@ func (h *UserHandler) InitProfile(c *gin.Context) {
 		return
 	}
 
-	if err := h.userService.InitProfile(c.Request.Context(), req.UserID, req.DisplayName); err != nil {
+	// ⚡ Passing req.UserID, req.DisplayName, and req.Email cleanly
+	if err := h.userService.InitProfile(c.Request.Context(), req.UserID, req.DisplayName, req.Email); err != nil {
 		log.Printf("[InitProfile DB ERROR]: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -78,7 +81,6 @@ func (h *UserHandler) GetProfile(c *gin.Context) {
 
 // 3. PUT /api/v1/users/profile
 func (h *UserHandler) UpdateProfile(c *gin.Context) {
-	// Extract current user ID set by AuthMiddleware
 	userID, exists := c.Get("userID")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{
@@ -210,7 +212,6 @@ func (h *UserHandler) Logout(c *gin.Context) {
 		return
 	}
 
-	// ⚡ Mark user as offline in database upon sign-out
 	if err := h.userService.UpdateStatus(c.Request.Context(), userID.(string), false); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
 		return
@@ -227,7 +228,6 @@ func (h *UserHandler) Heartbeat(c *gin.Context) {
 		return
 	}
 
-	// Sets is_online = true and updates last_seen = NOW()
 	if err := h.userService.UpdateStatus(c.Request.Context(), userID.(string), true); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
 		return
@@ -236,11 +236,10 @@ func (h *UserHandler) Heartbeat(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
-// POST /api/v1/users/presence/offline (Called by navigator.sendBeacon when closing tab)
+// POST /api/v1/users/presence/offline
 func (h *UserHandler) MarkOffline(c *gin.Context) {
 	userID, exists := c.Get("userID")
 	if !exists {
-		// If sent via Beacon token parameter or query fallback
 		userID = c.Query("user_id")
 	}
 
@@ -249,4 +248,48 @@ func (h *UserHandler) MarkOffline(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// GET /api/v1/admin/users
+func (h *UserHandler) AdminGetUsers(c *gin.Context) {
+	query := c.DefaultQuery("query", "")
+
+	profiles, err := h.userService.AdminGetAllUsers(c.Request.Context(), query)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Failed to fetch user directory: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    profiles,
+	})
+}
+
+// PATCH /api/v1/admin/users/:id/ban
+type BanRequest struct {
+	IsBanned bool `json:"is_banned"`
+}
+
+func (h *UserHandler) AdminToggleBan(c *gin.Context) {
+	targetID := c.Param("id")
+	var req BanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid payload format"})
+		return
+	}
+
+	err := h.userService.AdminSetUserBanStatus(c.Request.Context(), targetID, req.IsBanned)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to update ban status"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "User status modified successfully",
+	})
 }

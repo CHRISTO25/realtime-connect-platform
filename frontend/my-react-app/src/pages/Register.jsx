@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { authApi } from '../services/api/client'; // ⚡ Route through API Gateway (:8080)
 
 function Register() {
   const navigate = useNavigate();
@@ -7,7 +8,13 @@ function Register() {
     username: '',
     email: '',
     password: '',
+    confirmPassword: '',
   });
+
+  // Toggle states for password visibility
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -30,43 +37,45 @@ function Register() {
       setIsSubmitting(false);
       return;
     }
+
     if (formData.password.length < 6 || formData.password.length > 72) {
       setError('Password must be between 6 and 72 characters.');
       setIsSubmitting(false);
       return;
     }
 
+    if (formData.password !== formData.confirmPassword) {
+      setError('Password and Confirm Password do not match.');
+      setIsSubmitting(false);
+      return;
+    }
+
     try {
-      const response = await fetch('http://localhost:8001/api/v1/auth/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(formData),
+      // ⚡ Clean routing through API Gateway via authApi client
+      const response = await authApi.post('/api/v1/auth/register', {
+        username: formData.username.trim(),
+        email: formData.email.trim(),
+        password: formData.password,
       });
 
-      const data = await response.json();
+      const data = response.data;
 
-      if (!response.ok) {
+      if (!response.status === 200 && !data.success) {
         throw new Error(data.error || data.message || 'Registration failed');
       }
 
-      // If registration returns access tokens instantly, handle persistence:
-      if (data.data?.access_token && data.data?.user_id) {
-        localStorage.setItem('access_token', data.data.access_token);
-        localStorage.setItem('refresh_token', data.data.refresh_token);
-        localStorage.setItem('user_id', data.data.user_id);
-      }
-
-      setSuccess(data.message || 'Registration structural handshake verified! Welcome aboard.');
-      setFormData({ username: '', email: '', password: '' });
+      setSuccess(data.message || 'Registration structural handshake verified! Check inbox for OTP verification.');
       
+      const registeredEmail = formData.email.trim();
+      setFormData({ username: '', email: '', password: '', confirmPassword: '' });
+      
+      // Redirect to the OTP verification screen passing email state
       setTimeout(() => {
-        window.location.href = '/dashboard';
+        navigate('/verify-email', { state: { email: registeredEmail } });
       }, 1500);
 
     } catch (err) {
-      setError(err.message || 'Internal pipeline connection error');
+      setError(err.response?.data?.error || err.response?.data?.message || err.message || 'Internal pipeline connection error');
       setIsSubmitting(false);
     }
   };
@@ -85,7 +94,7 @@ function Register() {
         
         {/* Top Header Identity Layout */}
         <div className="text-center mb-8">
-          <div className="inline-flex h-12 w-12 rounded-xl flex items-center justify-center font-bold text-white text-xl shadow-md mb-4"
+          <div className="inline-flex h-12 w-12 rounded-xl items-center justify-center font-bold text-white text-xl shadow-md mb-4"
                style={{ background: 'linear-gradient(135deg, var(--accent), #7c3aed)' }}>
             ⚙️
           </div>
@@ -100,10 +109,7 @@ function Register() {
         {/* Global Pipeline Response Messages */}
         {error && (
           <div className="mb-6 p-3.5 rounded-lg border flex items-center gap-2.5 text-xs font-semibold tracking-wide text-rose-500"
-               style={{ 
-                 borderColor: 'rgba(239, 68, 68, 0.4)', 
-                 backgroundColor: 'rgba(239, 68, 68, 0.05)'
-               }}>
+               style={{ borderColor: 'rgba(239, 68, 68, 0.4)', backgroundColor: 'rgba(239, 68, 68, 0.05)' }}>
             <span>⚠️</span>
             <p>{error}</p>
           </div>
@@ -111,17 +117,14 @@ function Register() {
 
         {success && (
           <div className="mb-6 p-3.5 rounded-lg border flex items-center gap-2.5 text-xs font-semibold tracking-wide text-emerald-500"
-               style={{ 
-                 borderColor: 'rgba(16, 185, 129, 0.4)', 
-                 backgroundColor: 'rgba(16, 185, 129, 0.05)'
-               }}>
+               style={{ borderColor: 'rgba(16, 185, 129, 0.4)', backgroundColor: 'rgba(16, 185, 129, 0.05)' }}>
             <span>✓</span>
             <p>{success}</p>
           </div>
         )}
 
         {/* Interactive Data Form */}
-        <form onSubmit={handleSubmit} className="space-y-5 text-left">
+        <form onSubmit={handleSubmit} className="space-y-4 text-left">
           
           {/* Username Field */}
           <div>
@@ -138,14 +141,6 @@ function Register() {
               placeholder="e.g., cyber_operator"
               className="w-full px-4 py-3 rounded-xl border text-sm font-medium transition-all duration-150 outline-none bg-transparent"
               style={{ borderColor: 'var(--border)', color: 'var(--text-h)' }}
-              onFocus={(e) => {
-                e.target.style.borderColor = 'var(--accent)';
-                e.target.style.boxShadow = '0 0 0 2px var(--accent-bg)';
-              }}
-              onBlur={(e) => {
-                e.target.style.borderColor = 'var(--border)';
-                e.target.style.boxShadow = 'none';
-              }}
             />
           </div>
 
@@ -164,48 +159,70 @@ function Register() {
               placeholder="name@company.com"
               className="w-full px-4 py-3 rounded-xl border text-sm font-medium transition-all duration-150 outline-none bg-transparent"
               style={{ borderColor: 'var(--border)', color: 'var(--text-h)' }}
-              onFocus={(e) => {
-                e.target.style.borderColor = 'var(--accent)';
-                e.target.style.boxShadow = '0 0 0 2px var(--accent-bg)';
-              }}
-              onBlur={(e) => {
-                e.target.style.borderColor = 'var(--border)';
-                e.target.style.boxShadow = 'none';
-              }}
             />
           </div>
 
-          {/* Password Field */}
+          {/* Password Field with See/Unsee Toggle */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider mb-2 font-mono" 
                    style={{ color: 'var(--text-h)' }}>
               Access Security Key
             </label>
-            <input
-              type="password"
-              name="password"
-              value={formData.password}
-              onChange={handleChange}
-              required
-              placeholder="Min. 6 parameters"
-              className="w-full px-4 py-3 rounded-xl border text-sm font-medium transition-all duration-150 outline-none bg-transparent"
-              style={{ borderColor: 'var(--border)', color: 'var(--text-h)' }}
-              onFocus={(e) => {
-                e.target.style.borderColor = 'var(--accent)';
-                e.target.style.boxShadow = '0 0 0 2px var(--accent-bg)';
-              }}
-              onBlur={(e) => {
-                e.target.style.borderColor = 'var(--border)';
-                e.target.style.boxShadow = 'none';
-              }}
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                name="password"
+                value={formData.password}
+                onChange={handleChange}
+                required
+                placeholder="Min. 6 parameters"
+                className="w-full px-4 py-3 pr-12 rounded-xl border text-sm font-medium transition-all duration-150 outline-none bg-transparent"
+                style={{ borderColor: 'var(--border)', color: 'var(--text-h)' }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono opacity-60 hover:opacity-100 transition-opacity px-2 py-1"
+                style={{ color: 'var(--text-h)' }}
+              >
+                {showPassword ? 'HIDE' : 'SHOW'}
+              </button>
+            </div>
+          </div>
+
+          {/* Confirm Password Field with See/Unsee Toggle */}
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider mb-2 font-mono" 
+                   style={{ color: 'var(--text-h)' }}>
+              Confirm Security Key
+            </label>
+            <div className="relative">
+              <input
+                type={showConfirmPassword ? 'text' : 'password'}
+                name="confirmPassword"
+                value={formData.confirmPassword}
+                onChange={handleChange}
+                required
+                placeholder="Re-enter security key"
+                className="w-full px-4 py-3 pr-12 rounded-xl border text-sm font-medium transition-all duration-150 outline-none bg-transparent"
+                style={{ borderColor: 'var(--border)', color: 'var(--text-h)' }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono opacity-60 hover:opacity-100 transition-opacity px-2 py-1"
+                style={{ color: 'var(--text-h)' }}
+              >
+                {showConfirmPassword ? 'HIDE' : 'SHOW'}
+              </button>
+            </div>
           </div>
 
           {/* Premium Registration Form Button */}
           <button 
             type="submit" 
             disabled={isSubmitting}
-            className="w-full mt-2 py-3.5 px-4 rounded-xl text-sm font-bold tracking-wider uppercase transition-all duration-200 flex items-center justify-center space-x-2"
+            className="w-full mt-3 py-3.5 px-4 rounded-xl text-sm font-bold tracking-wider uppercase transition-all duration-200 flex items-center justify-center space-x-2 cursor-pointer"
             style={{ 
               backgroundColor: isSubmitting ? 'var(--border)' : 'var(--accent)', 
               color: isSubmitting ? 'var(--text)' : 'var(--bg)',
@@ -231,7 +248,7 @@ function Register() {
         {/* Core Metadata Block Footer */}
         <div className="mt-8 pt-4 border-t flex justify-between items-center text-[10px] font-mono opacity-40" 
              style={{ borderColor: 'var(--border)' }}>
-          <span>Encryption: Argon2id</span>
+          <span>Encryption: Argon2id / Bcrypt</span>
           <span>Gateway: Secure Node</span>
         </div>
 

@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { setUserProfile } from '../store/userSlice';
 import { userApi } from '../services/api/client';
-import Navbar from '../components/Navbar';
 
 export default function Profile() {
   const dispatch = useDispatch();
@@ -10,16 +9,17 @@ export default function Profile() {
   const currentLoggedInUserId = reduxUser?.id || localStorage.getItem('user_id');
 
   const [profile, setProfile] = useState({
-    displayName: reduxUser?.displayName || '',
+    displayName: reduxUser?.displayName || localStorage.getItem('display_name') || '',
     bio: '',
     location: '',
-    avatarUrl: reduxUser?.avatarUrl || '',
+    avatarUrl: reduxUser?.avatarUrl || localStorage.getItem('avatar_url') || '',
     coverUrl: '',
     caption: '',
   });
 
   const [isEditing, setIsEditing] = useState(false);
-  const [message, setMessage] = useState('');
+  const [loadingProfile, setLoadingProfile] = useState(true);
+  const [message, setMessage] = useState({ text: '', type: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
 
@@ -36,17 +36,18 @@ export default function Profile() {
   const coverInputRef = useRef(null);
   const canvasRef = useRef(null);
 
-  useEffect(() => {
-    if (currentLoggedInUserId) {
-      fetchProfileData();
-    }
-  }, [currentLoggedInUserId]);
+  const showNotification = (text, type = 'success') => {
+    setMessage({ text, type });
+    setTimeout(() => setMessage({ text: '', type: '' }), 4000);
+  };
 
-  // Fetch initial profile from GET /api/v1/users/profile/:id
-  const fetchProfileData = async () => {
+  // Fetch initial profile from GET /profile/:id
+  const fetchProfileData = useCallback(async () => {
+    if (!currentLoggedInUserId) return;
+    setLoadingProfile(true);
     try {
       const res = await userApi.get(`/profile/${currentLoggedInUserId}`);
-      if (res.data.success) {
+      if (res.data && res.data.success) {
         const data = res.data.data;
         const profileData = {
           displayName: data.display_name || '',
@@ -58,7 +59,10 @@ export default function Profile() {
         };
         setProfile(profileData);
 
-        // Sync Redux Store
+        // Sync Redux & LocalStorage
+        if (profileData.displayName) localStorage.setItem('display_name', profileData.displayName);
+        if (profileData.avatarUrl) localStorage.setItem('avatar_url', profileData.avatarUrl);
+
         dispatch(
           setUserProfile({
             id: currentLoggedInUserId,
@@ -68,39 +72,46 @@ export default function Profile() {
         );
       }
     } catch (err) {
-      setMessage('Failed to load profile parameters.');
+      console.error('Failed to load profile:', err);
+      showNotification('Failed to load profile parameters.', 'error');
+    } finally {
+      setLoadingProfile(false);
     }
-  };
+  }, [currentLoggedInUserId, dispatch]);
 
-  // Submit Text Profile Changes: PUT /api/v1/users/profile
+  useEffect(() => {
+    fetchProfileData();
+  }, [fetchProfileData]);
+
+  // Submit Text Profile Changes: PUT /profile
   const handleUpdateSubmit = async (e) => {
     e.preventDefault();
-    setMessage('');
     setIsSubmitting(true);
     try {
       const res = await userApi.put('/profile', {
-        display_name: profile.displayName,
-        bio: profile.bio,
-        location: profile.location,
+        display_name: profile.displayName.trim(),
+        bio: profile.bio.trim(),
+        location: profile.location.trim(),
         avatar_url: profile.avatarUrl,
         cover_url: profile.coverUrl,
-        caption: profile.caption,
+        caption: profile.caption.trim(),
       });
 
-      if (res.data.success) {
-        setMessage('Profile updated successfully!');
+      if (res.data && res.data.success) {
+        showNotification('Profile updated successfully!', 'success');
         setIsEditing(false);
 
+        localStorage.setItem('display_name', profile.displayName.trim());
         dispatch(
           setUserProfile({
             id: currentLoggedInUserId,
-            displayName: profile.displayName,
+            displayName: profile.displayName.trim(),
             avatarUrl: profile.avatarUrl,
           })
         );
       }
     } catch (err) {
-      setMessage(err.response?.data?.message || 'Update failed.');
+      showNotification(err.response?.data?.message || 'Profile update failed.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -123,7 +134,7 @@ export default function Profile() {
     e.target.value = '';
   };
 
-  // Drag Controls for Canvas
+  // Canvas Drag Handling
   const handleStart = (clientX, clientY) => {
     setIsDragging(true);
     setDragStart({ x: clientX - offset.x, y: clientY - offset.y });
@@ -136,7 +147,7 @@ export default function Profile() {
 
   const handleEnd = () => setIsDragging(false);
 
-  // Render Image on Canvas
+  // Render Image onto Canvas
   useEffect(() => {
     if (!cropModalOpen || !selectedRawImage || !canvasRef.current) return;
     const canvas = canvasRef.current;
@@ -146,7 +157,7 @@ export default function Profile() {
     img.onload = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const aspect = uploadType === 'avatar' ? 1 : 16 / 9;
-      const targetWidth = uploadType === 'avatar' ? 300 : 600;
+      const targetWidth = uploadType === 'avatar' ? 320 : 640;
       const targetHeight = targetWidth / aspect;
 
       canvas.width = targetWidth;
@@ -166,7 +177,7 @@ export default function Profile() {
     };
   }, [cropModalOpen, selectedRawImage, zoom, offset, uploadType]);
 
-  // ⚡ DIRECT SAVE & UPLOAD TO CLOUDINARY + DATABASE
+  // Apply Crop & Upload Media
   const handleApplyCropAndUpload = async () => {
     if (!canvasRef.current) return;
     setIsUploadingMedia(true);
@@ -184,14 +195,17 @@ export default function Profile() {
         formData.append(fieldName, blob, `${fieldName}.jpg`);
 
         try {
-          const res = await userApi.post(endpoint, formData);
+          const res = await userApi.post(endpoint, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
 
-          if (res.data.success) {
+          if (res.data && res.data.success) {
             const updatedData = res.data.data;
             const newUrl = uploadType === 'avatar' ? updatedData.avatar_url : updatedData.cover_url;
 
             if (uploadType === 'avatar') {
               setProfile((prev) => ({ ...prev, avatarUrl: newUrl }));
+              localStorage.setItem('avatar_url', newUrl);
               dispatch(
                 setUserProfile({
                   id: currentLoggedInUserId,
@@ -203,11 +217,11 @@ export default function Profile() {
               setProfile((prev) => ({ ...prev, coverUrl: newUrl }));
             }
 
-            setMessage(`${uploadType === 'avatar' ? 'Avatar' : 'Cover'} uploaded and saved!`);
+            showNotification(`${uploadType === 'avatar' ? 'Avatar photo' : 'Cover banner'} updated successfully!`, 'success');
             setCropModalOpen(false);
           }
         } catch (err) {
-          setMessage('Media upload failed. Please try again.');
+          showNotification('Media upload failed. Please try again.', 'error');
         } finally {
           setIsUploadingMedia(false);
         }
@@ -218,9 +232,7 @@ export default function Profile() {
   };
 
   return (
-    <div className="min-h-screen w-full bg-slate-950 text-slate-100 font-sans transition-colors duration-300">
-      <Navbar />
-
+    <div className="min-h-[calc(100vh-64px)] w-full bg-slate-950 text-slate-100 font-sans selection:bg-indigo-500 selection:text-white">
       {/* Hidden File Inputs */}
       <input
         type="file"
@@ -238,7 +250,7 @@ export default function Profile() {
       />
 
       {/* 1. COVER BANNER */}
-      <div className="relative h-44 sm:h-64 lg:h-80 w-full bg-slate-900 border-b border-slate-800/80 overflow-hidden group">
+      <div className="relative h-48 sm:h-64 lg:h-80 w-full bg-slate-900 border-b border-slate-800/80 overflow-hidden group">
         {profile.coverUrl ? (
           <img
             src={profile.coverUrl}
@@ -246,50 +258,50 @@ export default function Profile() {
             className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
           />
         ) : (
-          <div className="w-full h-full bg-gradient-to-r from-indigo-950 via-purple-950 to-slate-950 flex flex-col items-center justify-center gap-1.5 opacity-90">
-            <span className="text-2xl sm:text-3xl">🖼️</span>
+          <div className="w-full h-full bg-gradient-to-r from-indigo-950 via-purple-950 to-slate-950 flex flex-col items-center justify-center gap-2 opacity-90">
+            <span className="text-3xl">🖼️</span>
             <span className="text-xs text-slate-400 font-mono uppercase tracking-widest">
               No Background Cover
             </span>
           </div>
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-black/30" />
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-black/40" />
 
         {/* Change Cover Button */}
         <button
           type="button"
           onClick={() => coverInputRef.current?.click()}
-          className="absolute top-4 right-4 sm:top-6 sm:right-6 z-10 bg-slate-900/80 hover:bg-slate-900 text-white px-3.5 py-2 rounded-xl text-xs font-bold backdrop-blur-xl border border-slate-700/80 shadow-2xl flex items-center gap-2 transition-all"
+          className="absolute top-4 right-4 sm:top-6 sm:right-6 z-10 bg-slate-900/80 hover:bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold backdrop-blur-xl border border-slate-700/80 shadow-2xl flex items-center gap-2 transition-all cursor-pointer"
         >
-          <span>📷</span> <span className="hidden sm:inline">Change Cover Banner</span>
+          <span>📷</span> <span className="hidden sm:inline">Change Cover</span>
         </button>
       </div>
 
       {/* 2. MAIN CONTAINER */}
-      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 relative pb-16">
+      <main className="max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 relative pb-20">
         <div className="flex flex-col sm:flex-row sm:items-end justify-between -mt-16 sm:-mt-20 mb-6 gap-4">
           
-          {/* Avatar Ring */}
+          {/* Avatar Profile Ring */}
           <div className="relative z-10 self-start sm:self-auto">
             <div className="p-1 rounded-3xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 shadow-2xl">
               {profile.avatarUrl ? (
                 <img
                   src={profile.avatarUrl}
                   alt={profile.displayName}
-                  className="h-28 w-28 sm:h-36 sm:w-36 rounded-2xl object-cover border-4 border-slate-950 bg-slate-950"
+                  className="h-28 w-28 sm:h-36 sm:w-36 rounded-2xl object-cover border-4 border-slate-950 bg-slate-950 shadow-inner"
                 />
               ) : (
                 <div className="h-28 w-28 sm:h-36 sm:w-36 rounded-2xl border-4 border-slate-950 bg-slate-900 flex items-center justify-center text-3xl sm:text-4xl font-black text-slate-300">
-                  {profile.displayName ? profile.displayName.substring(0, 2).toUpperCase() : 'OP'}
+                  {profile.displayName ? profile.displayName.substring(0, 2).toUpperCase() : 'ME'}
                 </div>
               )}
             </div>
 
-            {/* Quick Upload Camera Badge */}
+            {/* Change Avatar Button */}
             <button
               type="button"
               onClick={() => avatarInputRef.current?.click()}
-              className="absolute -bottom-1 -right-1 z-20 bg-indigo-600 hover:bg-indigo-500 text-white p-2.5 sm:p-3 rounded-2xl border-2 border-slate-950 shadow-xl transition-transform hover:scale-110 active:scale-95 flex items-center justify-center"
+              className="absolute -bottom-1 -right-1 z-20 bg-indigo-600 hover:bg-indigo-500 text-white p-2.5 sm:p-3 rounded-2xl border-2 border-slate-950 shadow-xl transition-transform hover:scale-110 active:scale-95 flex items-center justify-center cursor-pointer"
               title="Change Profile Photo"
             >
               📷
@@ -297,59 +309,76 @@ export default function Profile() {
           </div>
 
           {/* Action Buttons */}
-          <div className="flex items-center gap-2.5 self-stretch sm:self-auto">
+          <div className="flex items-center gap-3 self-stretch sm:self-auto">
             {!isEditing ? (
               <button
                 onClick={() => setIsEditing(true)}
-                className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider bg-slate-900 hover:bg-slate-800 text-slate-100 transition-all border border-slate-800 shadow-lg active:scale-95"
+                className="flex-1 sm:flex-initial px-6 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider bg-slate-900 hover:bg-slate-800 text-slate-100 transition-all border border-slate-800 shadow-lg active:scale-95 cursor-pointer font-mono"
               >
-                Edit Profile
+                ✏️ Edit Profile
               </button>
             ) : (
               <button
                 onClick={() => setIsEditing(false)}
-                className="w-full sm:w-auto px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider bg-red-950/80 text-red-400 hover:bg-red-900/80 transition-all border border-red-800/50 shadow-lg"
+                className="w-full sm:w-auto px-6 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider bg-rose-950/80 text-rose-300 hover:bg-rose-900/80 transition-all border border-rose-800/50 shadow-lg cursor-pointer font-mono"
               >
-                Cancel
+                ✕ Cancel
               </button>
             )}
           </div>
         </div>
 
-        {/* FEEDBACK ALERT BANNER */}
-        {message && (
+        {/* FEEDBACK ALERT */}
+        {message.text && (
           <div
-            className={`mb-6 p-4 rounded-2xl text-xs font-semibold border backdrop-blur-xl ${
-              message.includes('successfully') || message.includes('saved')
+            className={`mb-6 p-4 rounded-2xl text-xs font-semibold border backdrop-blur-xl transition-all duration-300 ${
+              message.type === 'success'
                 ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
-                : 'border-red-500/30 bg-red-500/10 text-red-400'
+                : 'border-rose-500/30 bg-rose-500/10 text-rose-400'
             }`}
           >
-            {message}
+            {message.text}
           </div>
         )}
 
-        {/* DISPLAY MODE */}
-        {!isEditing ? (
+        {/* SKELETON / CONTENT */}
+        {loadingProfile ? (
+          <div className="space-y-4 animate-pulse">
+            <div className="h-8 bg-slate-900 rounded-xl w-64"></div>
+            <div className="h-4 bg-slate-900 rounded-xl w-40"></div>
+            <div className="h-20 bg-slate-900 rounded-2xl w-full max-w-2xl"></div>
+          </div>
+        ) : !isEditing ? (
+          /* DISPLAY MODE */
           <div className="space-y-6">
-            <div className="space-y-2">
-              <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
+            <div className="space-y-1">
+              <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white flex items-center gap-3">
                 {profile.displayName || 'Unnamed Operator'}
               </h1>
-              <p className="text-xs font-mono text-slate-400">
-                📍 {profile.location || 'Unknown Location'}
+              {profile.caption && (
+                <p className="text-xs text-indigo-400 font-mono italic">
+                  "{profile.caption}"
+                </p>
+              )}
+              <p className="text-xs font-mono text-slate-400 pt-1">
+                📍 {profile.location || 'Location Not Specified'}
               </p>
             </div>
 
-            <p className="text-sm text-slate-300 leading-relaxed max-w-3xl whitespace-pre-line">
-              {profile.bio || 'No profile biography specified yet.'}
-            </p>
+            <div className="p-5 rounded-2xl bg-slate-900/40 border border-slate-800/80 backdrop-blur-xl max-w-3xl">
+              <h3 className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 mb-2">
+                About / Biography
+              </h3>
+              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                {profile.bio || 'No profile biography specified yet. Click "Edit Profile" to introduce yourself.'}
+              </p>
+            </div>
           </div>
         ) : (
           /* EDIT FORM MODE */
           <form
             onSubmit={handleUpdateSubmit}
-            className="space-y-5 bg-slate-900/50 p-6 rounded-2xl border border-slate-800/80 backdrop-blur-xl shadow-2xl"
+            className="space-y-5 bg-slate-900/50 p-6 sm:p-8 rounded-3xl border border-slate-800/80 backdrop-blur-xl shadow-2xl max-w-3xl"
           >
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
@@ -360,7 +389,9 @@ export default function Profile() {
                   type="text"
                   value={profile.displayName}
                   onChange={(e) => setProfile({ ...profile, displayName: e.target.value })}
-                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white outline-none focus:border-indigo-500"
+                  required
+                  placeholder="e.g. Commander Alice"
+                  className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-indigo-500 shadow-inner"
                 />
               </div>
 
@@ -372,27 +403,45 @@ export default function Profile() {
                   type="text"
                   value={profile.location}
                   onChange={(e) => setProfile({ ...profile, location: e.target.value })}
-                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white outline-none focus:border-indigo-500"
+                  placeholder="e.g. San Francisco, CA"
+                  className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-indigo-500 shadow-inner"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1.5 font-mono">Bio</label>
+              <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1.5 font-mono">
+                Status Caption
+              </label>
+              <input
+                type="text"
+                value={profile.caption}
+                onChange={(e) => setProfile({ ...profile, caption: e.target.value })}
+                placeholder="e.g. Building distributed networks 🚀"
+                className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-indigo-500 shadow-inner"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1.5 font-mono">
+                Biography ({profile.bio.length}/500)
+              </label>
               <textarea
                 value={profile.bio}
+                maxLength={500}
                 onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
-                rows={3}
-                className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white outline-none focus:border-indigo-500 resize-none"
+                rows={4}
+                placeholder="Write a brief overview about yourself..."
+                className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-indigo-500 resize-none shadow-inner"
               />
             </div>
 
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full py-3 rounded-xl text-xs font-bold uppercase tracking-wider bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg"
+              className="w-full py-3.5 rounded-2xl text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-lg shadow-indigo-500/25 transition-all cursor-pointer disabled:opacity-50"
             >
-              {isSubmitting ? 'Saving...' : 'Save Profile Text Changes'}
+              {isSubmitting ? 'Committing Changes...' : 'Save Profile Changes 💾'}
             </button>
           </form>
         )}
@@ -400,14 +449,19 @@ export default function Profile() {
 
       {/* CROPPER MODAL */}
       {cropModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 font-mono">
-              Crop & Upload {uploadType === 'avatar' ? 'Avatar' : 'Cover Banner'}
-            </h4>
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-white font-mono">
+                Crop {uploadType === 'avatar' ? 'Profile Avatar' : 'Cover Banner'}
+              </h4>
+              <button onClick={() => setCropModalOpen(false)} className="text-slate-400 hover:text-white text-xs cursor-pointer">
+                ✕
+              </button>
+            </div>
 
             <div
-              className="relative overflow-hidden rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center cursor-move touch-none"
+              className="relative overflow-hidden rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-center cursor-move touch-none shadow-inner select-none"
               onMouseDown={(e) => handleStart(e.clientX, e.clientY)}
               onMouseMove={(e) => handleMove(e.clientX, e.clientY)}
               onMouseUp={handleEnd}
@@ -415,11 +469,14 @@ export default function Profile() {
               onTouchMove={(e) => handleMove(e.touches[0].clientX, e.touches[0].clientY)}
               onTouchEnd={handleEnd}
             >
-              <canvas ref={canvasRef} className="max-w-full max-h-[250px] object-contain" />
+              <canvas ref={canvasRef} className="max-w-full max-h-[260px] object-contain pointer-events-none" />
             </div>
 
-            <div className="space-y-1">
-              <span className="text-[10px] text-slate-400 uppercase font-mono">Zoom</span>
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-[10px] font-mono text-slate-400">
+                <span>Scale Zoom</span>
+                <span>{zoom.toFixed(2)}x</span>
+              </div>
               <input
                 type="range"
                 min="0.5"
@@ -431,11 +488,11 @@ export default function Profile() {
               />
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => setCropModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white bg-slate-800/60 cursor-pointer"
               >
                 Cancel
               </button>
@@ -443,9 +500,9 @@ export default function Profile() {
                 type="button"
                 onClick={handleApplyCropAndUpload}
                 disabled={isUploadingMedia}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md active:scale-95"
+                className="px-5 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-lg shadow-indigo-500/25 transition-all cursor-pointer disabled:opacity-50"
               >
-                {isUploadingMedia ? 'Uploading...' : 'Save & Upload'}
+                {isUploadingMedia ? 'Uploading...' : 'Save & Upload 🚀'}
               </button>
             </div>
           </div>

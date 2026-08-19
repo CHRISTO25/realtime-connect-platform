@@ -6,24 +6,28 @@ import (
 	"os"
 
 	"shared/database"
+	"shared/logger"     // 👈 1. Shared Zap logger package
+	"shared/middleware" // 👈 2. Shared Prometheus & Zap trace middleware
 
+	"chat-service/internal/config"
 	"chat-service/internal/handler"
 	"chat-service/internal/model"
 	"chat-service/internal/repository"
 	"chat-service/internal/routes"
 	"chat-service/internal/service"
+	"chat-service/internal/utils"
 	"chat-service/websocket"
 
 	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// 🟢 CORS Middleware to handle Preflight OPTIONS requests
+// 🟢 CORS Middleware to handle Preflight OPTIONS requests and Trace Headers
 func CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Request-ID")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
 
 		if c.Request.Method == "OPTIONS" {
@@ -36,9 +40,14 @@ func CORS() gin.HandlerFunc {
 }
 
 func main() {
-	_ = godotenv.Load()
+	// ⚡ 3. Initialize Zap Structured JSON Logger at absolute startup
+	logger.InitLogger()
+	defer logger.Log.Sync()
 
-	dbURL := os.Getenv("DATABASE_URL")
+	cfg := config.LoadConfig()
+
+	// 1. PostgreSQL Connection
+	dbURL := cfg.DatabaseURL
 	if dbURL == "" {
 		dbHost := os.Getenv("DB_HOST")
 		dbPort := os.Getenv("DB_PORT")
@@ -70,7 +79,7 @@ func main() {
 		log.Fatalf("Fatal: Database connection failed for Chat Service: %v", err)
 	}
 
-	// ⚡ FIX: Added &model.RoomMember{} to AutoMigrate
+	// ⚡ AutoMigrate models
 	if err := db.AutoMigrate(&model.Room{}, &model.RoomMember{}, &model.Message{}); err != nil {
 		log.Fatalf("Fatal: Database migration failed: %v", err)
 	}
@@ -78,29 +87,42 @@ func main() {
 	chatRepo := repository.NewChatRepository(db)
 	chatService := service.NewChatService(chatRepo)
 
+	// ⚡ Connect and initialize Redis Pub/Sub client before starting manager
+	_ = config.InitRedis()
+
+	// ⚡ WebSocket Manager with Redis Pub/Sub listener
 	manager := websocket.NewManager()
 	go manager.Run()
 
-	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" {
-		jwtSecret = "super_secret_jwt_key_12345"
-	}
+	// ⚡ Inter-Service REST Client
+	userClient := utils.NewUserServiceClient(cfg.UserServiceURL)
 
-	chatHandler := handler.NewChatHandler(jwtSecret, manager, chatService)
+	// ⚡ Chat Handler
+	chatHandler := handler.NewChatHandler(cfg.JWTSecret, manager, chatService, userClient)
 
-	router := gin.Default()
+	router := gin.New()
 
-	// 🟢 Attach CORS middleware to Gin
+	// 🟢 Attach Middlewares in Production Order
 	router.Use(CORS())
+	router.Use(gin.Recovery())
+
+	// ⚡ DAY 43: Attach Zap Structured Logger & Correlation Trace ID Middleware
+	router.Use(logger.ZapLoggerMiddleware())
+
+	// ⚡ DAY 42: Attach Prometheus Metrics Collection Middleware
+	router.Use(middleware.PrometheusMiddleware("chat-service"))
+
+	// ⚡ DAY 42: Expose standard Prometheus metrics scraper endpoint
+	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	routes.SetupRoutes(router, chatHandler)
 
-	port := os.Getenv("PORT")
+	port := cfg.AppPort
 	if port == "" {
 		port = "8003"
 	}
 
-	log.Printf("🚀 [Chat Service] Realtime Engine listening on port %s", port)
+	log.Printf("🚀 [Chat Service] Distributed Engine operational with Zap & Prometheus on port %s", port)
 	if err := router.Run(":" + port); err != nil {
 		log.Fatalf("Fatal: Chat Service server failed to start: %v", err)
 	}

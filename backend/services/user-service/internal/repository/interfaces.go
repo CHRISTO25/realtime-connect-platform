@@ -12,8 +12,11 @@ type ProfileRepository interface {
 	UpdateProfile(ctx context.Context, profile *model.UserProfile) error
 	UpdateStatus(ctx context.Context, id string, isOnline bool) error
 	GetAllProfilesPaginated(ctx context.Context, excludeUserID string, offset, limit int) ([]model.UserProfile, int64, error)
-	// ⚡ DAY 12: Search Engine Interface
 	SearchProfiles(ctx context.Context, currentUserID string, searchQuery, locationQuery string, offset, limit int) ([]model.UserProfile, int64, error)
+
+	// ⚡ ADDED: Admin Interface Contracts
+	AdminGetAllUsers(ctx context.Context, query string) ([]model.UserProfile, error)
+	AdminSetUserBanStatus(ctx context.Context, userID string, isBanned bool) error
 }
 
 type FriendRepository interface {

@@ -31,11 +31,12 @@ func isUserActive(isOnline bool, lastSeen time.Time) bool {
 	return time.Since(lastSeen) <= 20*time.Second
 }
 
-func (s *UserServiceImpl) InitProfile(ctx context.Context, userID string, displayName string) error {
+func (s *UserServiceImpl) InitProfile(ctx context.Context, userID string, displayName string, email string) error {
 	profile := &model.UserProfile{
 		ID:          userID,
 		UserID:      userID,
 		DisplayName: displayName,
+		Email:       email,
 		IsOnline:    false,
 		LastSeen:    time.Now(),
 	}
@@ -54,7 +55,7 @@ func (s *UserServiceImpl) GetProfile(ctx context.Context, userID string) (*dto.U
 		Location:    profile.Location,
 		AvatarURL:   profile.AvatarURL,
 		CoverURL:    profile.CoverURL,
-		IsOnline:    isUserActive(profile.IsOnline, profile.LastSeen), // ⚡ Dynamic Check
+		IsOnline:    isUserActive(profile.IsOnline, profile.LastSeen),
 		LastSeen:    profile.LastSeen.Format(time.RFC3339),
 	}, nil
 }
@@ -121,9 +122,9 @@ func (s *UserServiceImpl) UploadCover(ctx context.Context, userID string, fileHe
 	})
 }
 
-func (s *UserServiceImpl) GetAllProfiles(ctx context.Context, CurrentUserId string, page, perPage int) (*dto.GetAllUserResponse, error) {
+func (s *UserServiceImpl) GetAllProfiles(ctx context.Context, currentUserId string, page, perPage int) (*dto.GetAllUserResponse, error) {
 	offset := (page - 1) * perPage
-	profiles, totalCount, err := s.repo.GetAllProfilesPaginated(ctx, CurrentUserId, offset, perPage)
+	profiles, totalCount, err := s.repo.GetAllProfilesPaginated(ctx, currentUserId, offset, perPage)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +138,7 @@ func (s *UserServiceImpl) GetAllProfiles(ctx context.Context, CurrentUserId stri
 			Location:    p.Location,
 			AvatarURL:   p.AvatarURL,
 			CoverURL:    p.CoverURL,
-			IsOnline:    isUserActive(p.IsOnline, p.LastSeen), // ⚡ Dynamically sets online/offline status
+			IsOnline:    isUserActive(p.IsOnline, p.LastSeen),
 			IsFollowing: false,
 		})
 	}
@@ -165,7 +166,6 @@ func (s *UserServiceImpl) SearchUsers(ctx context.Context, currentUserID string,
 		return nil, err
 	}
 
-	// ⚡ Dynamically map active presence for search profiles
 	for i := range profiles {
 		profiles[i].IsOnline = isUserActive(profiles[i].IsOnline, profiles[i].LastSeen)
 	}
@@ -188,4 +188,12 @@ func (s *UserServiceImpl) SearchUsers(ctx context.Context, currentUserID string,
 
 func (s *UserServiceImpl) UpdateStatus(ctx context.Context, userID string, isOnline bool) error {
 	return s.repo.UpdateStatus(ctx, userID, isOnline)
+}
+
+func (s *UserServiceImpl) AdminGetAllUsers(ctx context.Context, query string) ([]model.UserProfile, error) {
+	return s.repo.AdminGetAllUsers(ctx, query)
+}
+
+func (s *UserServiceImpl) AdminSetUserBanStatus(ctx context.Context, userID string, isBanned bool) error {
+	return s.repo.AdminSetUserBanStatus(ctx, userID, isBanned)
 }

@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { useWebSocket } from "../context/WebSocketContext"; // ⚡ WebSocket Context
+import { useWebSocket } from "../context/WebsocketContext";
 
-export default function Navbar() {
+export default function Navbar({ onStartVoiceCall, onStartVideoCall }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { logout } = useAuth(); 
   
-  // ⚡ Upgraded WebSocket context parameters (connectionStatus support)
   const { isConnected, connectionStatus, connect } = useWebSocket();
   
   const dropdownRef = useRef(null);
@@ -19,7 +18,6 @@ export default function Navbar() {
   const userId = localStorage.getItem('user_id');
   const isActive = (path) => location.pathname === path;
 
-  // Resolve status state string whether connectionStatus or boolean is present
   const currentStatus = connectionStatus || (isConnected ? 'CONNECTED' : 'DISCONNECTED');
 
   useEffect(() => {
@@ -78,7 +76,7 @@ export default function Navbar() {
           <span>🏠</span> Dashboard
         </Link>
 
-        {/* ⚡ WEBSOCKET CHAT ROUTE WITH DYNAMIC STATUS DOT */}
+        {/* WEBSOCKET CHAT ROUTE WITH STATUS DOT */}
         <Link
           to="/chat-test"
           className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 relative ${
@@ -89,24 +87,14 @@ export default function Navbar() {
         >
           <span>💬</span> WS Chat
 
-          {/* Tri-state status indicator dot */}
           {currentStatus === 'CONNECTED' && (
-            <span 
-              className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"
-              title="WebSocket Connected 🟢"
-            ></span>
+            <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]" title="Connected"></span>
           )}
           {currentStatus === 'CONNECTING' && (
-            <span 
-              className="h-2.5 w-2.5 rounded-full bg-amber-400 animate-ping"
-              title="Establishing Handshake... 🟡"
-            ></span>
+            <span className="h-2.5 w-2.5 rounded-full bg-amber-400 animate-ping" title="Connecting"></span>
           )}
           {currentStatus === 'DISCONNECTED' && (
-            <span 
-              className="h-2.5 w-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)]"
-              title="WebSocket Disconnected 🔴"
-            ></span>
+            <span className="h-2.5 w-2.5 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)]" title="Disconnected"></span>
           )}
         </Link>
 
@@ -137,21 +125,11 @@ export default function Navbar() {
             </div>
           )}
 
-          {currentStatus === 'CONNECTING' && (
-            <div className="flex items-center px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[10px] font-mono gap-2 text-amber-400">
-              <svg className="animate-spin h-3 w-3 text-amber-400" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-              </svg>
-              <span className="font-bold">CONNECTING...</span>
-            </div>
-          )}
-
           {currentStatus === 'DISCONNECTED' && (
             <button
               onClick={connect}
               className="flex items-center px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-[10px] font-mono gap-2 text-slate-400 hover:text-white transition-all cursor-pointer"
-              title="Click to reconnect WebSocket"
+              title="Click to reconnect"
             >
               <span className="h-2 w-2 rounded-full bg-rose-500"></span>
               <span>WS OFFLINE (RETRY)</span>
@@ -162,8 +140,8 @@ export default function Navbar() {
         {/* CALL SHORTCUTS */}
         <div className="flex items-center space-x-1 bg-slate-900/80 border border-slate-800 p-1 rounded-xl">
           <button
-            onClick={() => navigate('/chat-test?action=voice')}
-            className="p-2 text-slate-400 hover:text-emerald-400 hover:bg-slate-800/80 rounded-lg transition-all"
+            onClick={onStartVoiceCall}
+            className="p-2 text-slate-400 hover:text-emerald-400 hover:bg-slate-800/80 rounded-lg transition-all cursor-pointer"
             title="Start Voice Call"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
@@ -172,8 +150,8 @@ export default function Navbar() {
           </button>
           
           <button
-            onClick={() => navigate('/chat-test?action=video')}
-            className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-slate-800/80 rounded-lg transition-all"
+            onClick={onStartVideoCall}
+            className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-slate-800/80 rounded-lg transition-all cursor-pointer"
             title="Start Video Call"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
@@ -186,22 +164,16 @@ export default function Navbar() {
         <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => setDropdownOpen(!dropdownOpen)}
-            className="flex items-center space-x-2 focus:outline-none p-1 rounded-xl transition-all hover:bg-slate-900 border border-transparent hover:border-slate-800"
+            className="flex items-center space-x-2 focus:outline-none p-1 rounded-xl transition-all hover:bg-slate-900 border border-transparent hover:border-slate-800 cursor-pointer"
           >
             {avatarUrl ? (
-              <img 
-                src={avatarUrl} 
-                alt="Profile" 
-                className="h-8 w-8 rounded-lg object-cover border border-indigo-500/50"
-              />
+              <img src={avatarUrl} alt="Profile" className="h-8 w-8 rounded-lg object-cover border border-indigo-500/50" />
             ) : (
               <div className="h-8 w-8 rounded-lg bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center font-bold text-white text-xs">
                 {displayName.substring(0, 2).toUpperCase()}
               </div>
             )}
-            <span className="text-[10px] text-slate-500">
-              {dropdownOpen ? '▲' : '▼'}
-            </span>
+            <span className="text-[10px] text-slate-500">{dropdownOpen ? '▲' : '▼'}</span>
           </button>
 
           {dropdownOpen && (
@@ -209,13 +181,13 @@ export default function Navbar() {
               <div className="px-3 py-2.5 border-b border-slate-800/80 mb-1">
                 <p className="text-sm font-bold text-white truncate">{displayName}</p>
                 <p className="text-[10px] text-slate-500 font-mono truncate">
-                  User ID: {userId ? `${userId.substring(0, 10)}...` : 'Guest'}
+                  ID: {userId ? `${userId.substring(0, 10)}...` : 'Guest'}
                 </p>
               </div>
 
               <button
                 onClick={() => { setDropdownOpen(false); navigate('/profile'); }}
-                className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800/80 transition-all flex items-center justify-between"
+                className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800/80 transition-all flex items-center justify-between cursor-pointer"
               >
                 <span>⚙️ Account Settings</span>
                 <span className="text-slate-600">→</span>
@@ -224,7 +196,7 @@ export default function Navbar() {
               <div className="pt-1 border-t border-slate-800/80">
                 <button
                   onClick={handleLogout}
-                  className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold text-red-400 hover:bg-red-500/10 transition-colors flex items-center justify-between"
+                  className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold text-red-400 hover:bg-red-500/10 transition-colors flex items-center justify-between cursor-pointer"
                 >
                   <span>Sign Out</span>
                   <span>⎋</span>

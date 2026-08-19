@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
-import { useWebSocket } from "../context/WebSocketContext";
+import { useWebSocket } from "../context/WebsocketContext";
 import { userApi } from "../services/api/client";
 
 export default function PresenceTracker() {

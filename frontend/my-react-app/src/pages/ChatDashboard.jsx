@@ -1,11 +1,14 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useWebSocket } from '../context/WebSocketContext';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useWebSocket } from '../context/WebsocketContext';
 import { userApi } from '../services/api/client';
 import { useChatStore } from '../store/useChatStore';
 import ActiveFriendsBar from '../components/ActiveFriendsBar';
 import UserStatusBadge from '../components/UserStatusBadge';
 import ChatContextPanel from '../components/ChatContextPanel';
 import MediaMessageRenderer from '../components/MediaMessageRenderer';
+import AudioCallModal from '../components/AudioCallModal';
+import VideoCallModal from '../components/VideoCallModal';
+import { useWebRTC } from '../hooks/useWebRTC';
 
 const GLOBAL_ROOM_ID = "00000000-0000-0000-0000-000000000001";
 
@@ -38,8 +41,9 @@ export default function ChatDashboard() {
   const [inputText, setInputText] = useState('');
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [loadingFriends, setLoadingFriends] = useState(true);
+  const [isDegradedMode, setIsDegradedMode] = useState(false);
 
-  // File Attachment & Progress Bar State
+  // File Attachment & Progress
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -53,19 +57,46 @@ export default function ChatDashboard() {
   const [selectedMembers, setSelectedMembers] = useState([]);
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
 
+  // Calling States
+  const [activeCallType, setActiveCallType] = useState('audio');
+
   const currentUserId = localStorage.getItem('user_id');
   const chatBottomRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const lastTypingSentRef = useRef(false);
+  const isSyncingRef = useRef(false);
+  const processedAcksRef = useRef(new Set());
 
-  const currentRoomMessages = messagesByRoom[activeTarget.id] || [];
+  const currentRoomMessages = useMemo(() => messagesByRoom[activeTarget.id] || [], [messagesByRoom, activeTarget.id]);
   const isCurrentRoomTyping = typingStatusByRoom[activeTarget.id] || false;
+  const recipientId = activeTarget.friendId || null;
 
+  // WebRTC Hook
+  const { 
+    localStream, 
+    remoteStream, 
+    callStatus, 
+    startCall, 
+    endCall 
+  } = useWebRTC(
+    activeTarget.id,
+    currentUserId,
+    recipientId,
+    sendMessage,
+    wsMessages
+  );
+
+  const isAudioActive = activeCallType === 'audio' && (callStatus === 'RINGING_OUTGOING' || callStatus === 'CONNECTED');
+  const isVideoActive = activeCallType === 'video' && (callStatus === 'RINGING_OUTGOING' || callStatus === 'CONNECTED');
+
+  // Background Data Sync
   const syncData = useCallback(async () => {
+    if (isSyncingRef.current) return;
+    isSyncingRef.current = true;
     try {
       const [friendsRes, roomsRes] = await Promise.allSettled([
         userApi.get('/friends/list'),
-        userApi.get(`http://localhost:8003/api/v1/chat/rooms/${currentUserId}`)
+        userApi.get(`/api/v1/chat/rooms/${currentUserId}`)
       ]);
 
       if (friendsRes.status === 'fulfilled' && friendsRes.value.data?.success) {
@@ -75,27 +106,44 @@ export default function ChatDashboard() {
         setRooms(roomsRes.value.data.data || []);
       }
     } catch (err) {
-      console.warn("Silent sync warning:", err);
+      console.warn("Background sync warning:", err);
     } finally {
       setLoadingFriends(false);
+      isSyncingRef.current = false;
     }
   }, [currentUserId, setFriends, setRooms]);
 
   useEffect(() => {
     syncData();
-    const interval = setInterval(syncData, 3000);
+    const interval = setInterval(syncData, 4000);
     return () => clearInterval(interval);
   }, [syncData]);
 
-  // Fetch History Window
+  // Load Room History & Check Service Health
   useEffect(() => {
-    const fetchHistory = async () => {
+    let isCancelled = false;
+    const fetchRoomAndHistory = async () => {
       setLoadingHistory(true);
       setTypingStatus(activeTarget.id, false);
+
       try {
         const roomId = activeTarget.id;
-        const res = await userApi.get(`http://localhost:8003/api/v1/chat/history/${roomId}`);
-        if (res.data && res.data.success && Array.isArray(res.data.data)) {
+        
+        if (activeTarget.type === 'DIRECT' && activeTarget.friendId) {
+          try {
+            const roomMetaRes = await userApi.get(`/api/v1/chat/room/${activeTarget.friendId}`);
+            if (!isCancelled && roomMetaRes.data?.success) {
+              setIsDegradedMode(Boolean(roomMetaRes.data.data?.degraded));
+            }
+          } catch {
+            if (!isCancelled) setIsDegradedMode(true);
+          }
+        } else {
+          if (!isCancelled) setIsDegradedMode(false);
+        }
+
+        const res = await userApi.get(`/api/v1/chat/history/${roomId}`);
+        if (!isCancelled && res.data?.success && Array.isArray(res.data.data)) {
           const historical = res.data.data.map(m => {
             const isMe = String(m.sender_id) === String(currentUserId);
             return { ...m, status: isMe ? 'DELIVERED' : 'READ' };
@@ -103,60 +151,86 @@ export default function ChatDashboard() {
           setRoomMessages(roomId, historical);
 
           historical.forEach(m => {
-            if (String(m.sender_id) !== String(currentUserId)) {
+            if (String(m.sender_id) !== String(currentUserId) && !processedAcksRef.current.has(m.id)) {
+              processedAcksRef.current.add(m.id);
               sendMessage({ type: "DELIVERED_ACK", room_id: roomId, content: m.id });
               sendMessage({ type: "READ_ACK", room_id: roomId, content: m.id });
             }
           });
-        } else {
+        } else if (!isCancelled) {
           setRoomMessages(roomId, []);
         }
       } catch (err) {
-        console.error("Failed to load history:", err);
-        setRoomMessages(activeTarget.id, []);
+        if (!isCancelled) {
+          console.error("Failed to load room stream history:", err);
+          setRoomMessages(activeTarget.id, []);
+        }
       } finally {
-        setLoadingHistory(false);
+        if (!isCancelled) setLoadingHistory(false);
       }
     };
 
-    fetchHistory();
-  }, [activeTarget.id, currentUserId, setRoomMessages, setTypingStatus, sendMessage]);
+    fetchRoomAndHistory();
 
-  // Handle Inbound WebSocket Frames
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeTarget.id, activeTarget.type, activeTarget.friendId, currentUserId, setRoomMessages, setTypingStatus, sendMessage]);
+
+  // WebSocket Inbound Frame Listener
   useEffect(() => {
     if (!wsMessages || wsMessages.length === 0) return;
     const latestFrame = wsMessages[wsMessages.length - 1];
 
-    if (latestFrame.type === 'NEW_MESSAGE') {
-      const targetRoomId = latestFrame.room_id || GLOBAL_ROOM_ID;
-      if (targetRoomId === activeTarget.id) {
-        const isFromMe = String(latestFrame.sender_id) === String(currentUserId);
-        appendMessageToRoom(targetRoomId, latestFrame, currentUserId);
+    switch (latestFrame.type) {
+      case 'NEW_MESSAGE': {
+        const targetRoomId = latestFrame.room_id || GLOBAL_ROOM_ID;
+        if (targetRoomId === activeTarget.id) {
+          const isFromMe = String(latestFrame.sender_id) === String(currentUserId);
+          appendMessageToRoom(targetRoomId, latestFrame, currentUserId);
 
-        if (!isFromMe) {
-          setTypingStatus(targetRoomId, false);
-          sendMessage({ type: "DELIVERED_ACK", room_id: targetRoomId, content: latestFrame.id });
-          sendMessage({ type: "READ_ACK", room_id: targetRoomId, content: latestFrame.id });
+          if (!isFromMe) {
+            setTypingStatus(targetRoomId, false);
+            sendMessage({ type: "DELIVERED_ACK", room_id: targetRoomId, content: latestFrame.id });
+            sendMessage({ type: "READ_ACK", room_id: targetRoomId, content: latestFrame.id });
+          }
         }
+        break;
       }
-    } else if (latestFrame.type === 'DELIVERED_ACK') {
-      const msgId = latestFrame.id || latestFrame.content;
-      if (latestFrame.room_id === activeTarget.id && msgId) {
-        updateMessageStatus(activeTarget.id, msgId, 'DELIVERED');
+      case 'DELIVERED_ACK': {
+        const msgId = latestFrame.id || latestFrame.content;
+        if (latestFrame.room_id === activeTarget.id && msgId) {
+          updateMessageStatus(activeTarget.id, msgId, 'DELIVERED');
+        }
+        break;
       }
-    } else if (latestFrame.type === 'READ_ACK') {
-      const msgId = latestFrame.id || latestFrame.content;
-      if (latestFrame.room_id === activeTarget.id && msgId) {
-        updateMessageStatus(activeTarget.id, msgId, 'READ');
+      case 'READ_ACK': {
+        const msgId = latestFrame.id || latestFrame.content;
+        if (latestFrame.room_id === activeTarget.id && msgId) {
+          updateMessageStatus(activeTarget.id, msgId, 'READ');
+        }
+        break;
       }
-    } else if (latestFrame.type === 'TYPING_START') {
-      if (latestFrame.room_id === activeTarget.id && String(latestFrame.sender_id) !== String(currentUserId)) {
-        setTypingStatus(activeTarget.id, true);
+      case 'TYPING_START': {
+        if (latestFrame.room_id === activeTarget.id && String(latestFrame.sender_id) !== String(currentUserId)) {
+          setTypingStatus(activeTarget.id, true);
+        }
+        break;
       }
-    } else if (latestFrame.type === 'TYPING_STOP') {
-      if (latestFrame.room_id === activeTarget.id && String(latestFrame.sender_id) !== String(currentUserId)) {
-        setTypingStatus(activeTarget.id, false);
+      case 'TYPING_STOP': {
+        if (latestFrame.room_id === activeTarget.id && String(latestFrame.sender_id) !== String(currentUserId)) {
+          setTypingStatus(activeTarget.id, false);
+        }
+        break;
       }
+      case 'CALL_OFFER': {
+        if (latestFrame.room_id === activeTarget.id && String(latestFrame.sender_id) !== String(currentUserId)) {
+          setActiveCallType(latestFrame.content?.includes('video') ? 'video' : 'audio');
+        }
+        break;
+      }
+      default:
+        break;
     }
   }, [wsMessages, activeTarget.id, currentUserId, appendMessageToRoom, updateMessageStatus, setTypingStatus, sendMessage]);
 
@@ -165,17 +239,48 @@ export default function ChatDashboard() {
   }, [currentRoomMessages, isCurrentRoomTyping]);
 
   const handleFileSelect = (e) => {
-    const file = e.target.files[0];
+    const file = e.target.files?.[0];
     if (file) {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
       setSelectedFile(file);
       setPreviewUrl(URL.createObjectURL(file));
     }
   };
 
-  const clearSelectedFile = () => {
+  const clearSelectedFile = useCallback(() => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
     setSelectedFile(null);
     setPreviewUrl(null);
     setUploadProgress(0);
+  }, [previewUrl]);
+
+  // Voice Call
+  const handleInitiateAudioCall = async () => {
+    if (!recipientId) return alert("Select a direct friend to initiate a voice call.");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      setActiveCallType('audio');
+      await startCall(stream, 'audio');
+    } catch (err) {
+      console.error("Microphone access denied:", err);
+      alert("Microphone permissions required for voice calls.");
+    }
+  };
+
+  // Video Call
+  const handleInitiateVideoCall = async () => {
+    if (!recipientId) return alert("Select a direct friend to initiate a video call.");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: true, 
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" } 
+      });
+      setActiveCallType('video');
+      await startCall(stream, 'video');
+    } catch (err) {
+      console.error("Camera Permission Error:", err);
+      alert("Camera & Microphone permissions required for video calls.");
+    }
   };
 
   const handleCreateGroupSubmit = async (e) => {
@@ -188,8 +293,8 @@ export default function ChatDashboard() {
         name: groupName.trim(),
         member_ids: [...selectedMembers, currentUserId]
       };
-      const res = await userApi.post('http://localhost:8003/api/v1/chat/rooms', payload);
-      if (res.data && res.data.success) {
+      const res = await userApi.post('/api/v1/chat/rooms', payload);
+      if (res.data?.success) {
         setIsGroupModalOpen(false);
         setGroupName('');
         setSelectedMembers([]);
@@ -202,7 +307,6 @@ export default function ChatDashboard() {
     }
   };
 
-  // ⚡ Multipart Cloudinary Upload with Live Progress Tracking
   const handleSendMessage = async (e) => {
     e.preventDefault();
     const textContent = inputText.trim();
@@ -223,19 +327,19 @@ export default function ChatDashboard() {
       formData.append("file", selectedFile);
 
       try {
-        const uploadRes = await userApi.post('http://localhost:8003/api/v1/chat/upload', formData, {
+        const uploadRes = await userApi.post('/api/v1/chat/upload', formData, {
           headers: { "Content-Type": "multipart/form-data" },
           onUploadProgress: (progressEvent) => {
             const percent = Math.round((progressEvent.loaded * 90) / progressEvent.total);
             setUploadProgress(Math.max(10, percent));
           }
         });
-        if (uploadRes.data && uploadRes.data.success) {
+        if (uploadRes.data?.success) {
           mediaUrl = uploadRes.data.data.file_url;
           setUploadProgress(100);
         }
       } catch (err) {
-        console.error("Cloudinary upload failed:", err);
+        console.error("Upload failed:", err);
       } finally {
         setIsUploading(false);
         clearSelectedFile();
@@ -274,19 +378,19 @@ export default function ChatDashboard() {
     setMobileShowChat(true);
   }, [currentUserId, setActiveTarget]);
 
-  const selectGroupChat = (room) => {
+  const selectGroupChat = useCallback((room) => {
     setActiveTarget({
       id: room.id,
       name: room.name,
       type: "GROUP",
     });
     setMobileShowChat(true);
-  };
+  }, [setActiveTarget]);
 
   return (
     <div className="h-[calc(100vh-64px)] w-screen bg-slate-950 text-slate-100 font-sans flex flex-col items-center overflow-hidden selection:bg-indigo-500 selection:text-white">
       
-      {/* GROUP CREATION MODAL OVERLAY */}
+      {/* GROUP CREATION MODAL */}
       {isGroupModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xl flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-800/80 rounded-3xl w-full max-w-md p-7 shadow-2xl space-y-6">
@@ -305,7 +409,7 @@ export default function ChatDashboard() {
                   type="text"
                   value={groupName}
                   onChange={(e) => setGroupName(e.target.value)}
-                  placeholder="e.g. Elite Engineering Squad..."
+                  placeholder="e.g. Core Engineering Guild..."
                   required
                   className="w-full bg-slate-950 border border-slate-800/80 rounded-2xl px-4 py-3 text-xs text-white outline-none focus:border-indigo-500 transition-all shadow-inner"
                 />
@@ -320,13 +424,11 @@ export default function ChatDashboard() {
                     return (
                       <div
                         key={fId}
-                        onClick={() => {
-                          setSelectedMembers(prev => isChecked ? prev.filter(id => id !== fId) : [...prev, fId]);
-                        }}
+                        onClick={() => setSelectedMembers(prev => isChecked ? prev.filter(id => id !== fId) : [...prev, fId])}
                         className={`flex items-center justify-between p-3 rounded-2xl text-xs cursor-pointer transition-all ${isChecked ? 'bg-indigo-600/20 border border-indigo-500/50 text-indigo-200 shadow-md shadow-indigo-500/10' : 'bg-slate-950/40 border border-slate-800/60 text-slate-300 hover:bg-slate-800/40'}`}
                       >
                         <span className="font-bold truncate">{friend.display_name || friend.name || 'Friend'}</span>
-                        <input type="checkbox" checked={isChecked} onChange={() => {}} className="rounded bg-slate-950 border-slate-700 text-indigo-600 pointer-events-none" />
+                        <input type="checkbox" checked={isChecked} readOnly className="rounded bg-slate-950 border-slate-700 text-indigo-600 pointer-events-none" />
                       </div>
                     );
                   })}
@@ -347,7 +449,7 @@ export default function ChatDashboard() {
                   disabled={!groupName.trim() || selectedMembers.length === 0 || isCreatingGroup}
                   className="flex-1 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold py-3 rounded-2xl text-xs transition-all disabled:opacity-40 cursor-pointer shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2"
                 >
-                  {isCreatingGroup ? "Launching..." : "Launch Group 🚀"}
+                  {isCreatingGroup ? "Creating..." : "Create Group 🚀"}
                 </button>
               </div>
             </form>
@@ -355,15 +457,15 @@ export default function ChatDashboard() {
         </div>
       )}
 
-      {/* ACTIVE FRIENDS CAROUSEL BAR */}
+      {/* ACTIVE FRIENDS BAR */}
       <div className="w-full shrink-0">
         <ActiveFriendsBar friends={friends} onSelectFriend={selectFriendChat} />
       </div>
 
-      {/* THREE-PANE LAYOUT CONTAINER */}
+      {/* MAIN CHAT GRID */}
       <main className="max-w-[1600px] w-full mx-auto px-3 sm:px-6 py-3 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-6 min-h-0 overflow-hidden">
         
-        {/* LEFT PANE: SIDEBAR & CONVERSATIONS */}
+        {/* LEFT PANEL: SIDEBAR */}
         <section className={`lg:col-span-3 bg-slate-900/40 border border-slate-800/80 rounded-3xl p-4 flex flex-col justify-between backdrop-blur-2xl shadow-2xl h-full overflow-hidden min-h-0 ${mobileShowChat ? 'hidden lg:flex' : 'flex'}`}>
           <div className="space-y-3 flex-1 flex flex-col min-h-0 overflow-hidden">
             <div className="flex items-center justify-between px-1 shrink-0">
@@ -372,7 +474,7 @@ export default function ChatDashboard() {
                 onClick={() => setIsGroupModalOpen(true)}
                 className="text-[10px] font-mono font-bold bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-xl transition-all shadow-md shadow-indigo-500/20 cursor-pointer"
               >
-                + New Group
+                + Group
               </button>
             </div>
 
@@ -390,7 +492,7 @@ export default function ChatDashboard() {
               <div className="h-9 w-9 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-sm shrink-0">🌐</div>
               <div className="text-left truncate">
                 <p className="truncate font-bold">Global Lounge</p>
-                <p className="text-[10px] text-slate-400 font-normal">Public Chatroom</p>
+                <p className="text-[10px] text-slate-400 font-normal">Broadcast Network</p>
               </div>
             </button>
 
@@ -425,7 +527,7 @@ export default function ChatDashboard() {
                   </div>
                 ) : friends.length === 0 ? (
                   <div className="text-center py-6 px-4 text-xs font-mono text-slate-500 border border-dashed border-slate-800/80 rounded-2xl bg-slate-950/30">
-                    No friends connected yet.
+                    No direct friends connected.
                   </div>
                 ) : (
                   friends.map((friend) => {
@@ -454,7 +556,7 @@ export default function ChatDashboard() {
                           </div>
                           <div className="text-left truncate">
                             <p className="font-bold text-white truncate">{friend.display_name || friend.name || 'Friend'}</p>
-                            <p className="text-[10px] text-slate-500 font-mono">1-on-1 Chat</p>
+                            <p className="text-[10px] text-slate-500 font-mono">1-on-1 Session</p>
                           </div>
                         </div>
                         <UserStatusBadge isOnline={online} />
@@ -466,56 +568,87 @@ export default function ChatDashboard() {
             </div>
           </div>
 
-          <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono shrink-0 mt-2">
-            <span className="text-slate-500">Pipeline:</span>
+          {/* Sidebar Footer Link Status */}
+          <div className="pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono shrink-0 mt-2">
+            <div className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
+              <span className="text-slate-400">Mesh Gateway:</span>
+            </div>
             <span className={`font-bold ${isConnected ? "text-emerald-400" : "text-rose-400"}`}>{connectionStatus}</span>
           </div>
         </section>
 
-        {/* CENTER PANE: ACTIVE MESSAGE FEED VIEWPORT */}
+        {/* CENTER PANEL: ACTIVE CONVERSATION FEED */}
         <section className={`lg:col-span-6 bg-slate-900/40 border border-slate-800/80 rounded-3xl p-4 sm:p-5 backdrop-blur-2xl flex flex-col justify-between shadow-2xl h-full overflow-hidden min-h-0 ${mobileShowChat ? 'flex' : 'hidden lg:flex'}`}>
           
           {/* Header */}
-          <div className="pb-3 border-b border-slate-800/80 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-3 truncate">
-              <button
-                onClick={() => setMobileShowChat(false)}
-                className="lg:hidden p-2 rounded-2xl bg-slate-800 text-slate-200 text-xs font-bold shrink-0 cursor-pointer"
-              >
-                ← Back
-              </button>
+          <div className="pb-3 border-b border-slate-800/80 flex flex-col gap-2 shrink-0">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3 truncate">
+                <button
+                  onClick={() => setMobileShowChat(false)}
+                  className="lg:hidden p-2 rounded-2xl bg-slate-800 text-slate-200 text-xs font-bold shrink-0 cursor-pointer"
+                >
+                  ←
+                </button>
 
-              <div className="h-10 w-10 rounded-2xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center text-sm font-bold shadow-md shrink-0">
-                {activeTarget.type === "GLOBAL" ? "🌐" : activeTarget.type === "GROUP" ? "👥" : activeTarget.name.substring(0, 2).toUpperCase()}
+                <div className="h-10 w-10 rounded-2xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center text-sm font-bold shadow-md shrink-0">
+                  {activeTarget.type === "GLOBAL" ? "🌐" : activeTarget.type === "GROUP" ? "👥" : activeTarget.name.substring(0, 2).toUpperCase()}
+                </div>
+                <div className="truncate">
+                  <h2 className="text-xs sm:text-sm font-bold text-white flex items-center gap-2 truncate">
+                    <span className="truncate">{activeTarget.name}</span>
+                    {activeTarget.type === "DIRECT" && <UserStatusBadge isOnline={activeTarget.isOnline} />}
+                  </h2>
+                  <p className="text-[9px] text-slate-500 font-mono truncate">Room UUID: {activeTarget.id}</p>
+                </div>
               </div>
-              <div className="truncate">
-                <h2 className="text-xs sm:text-sm font-bold text-white flex items-center gap-2 truncate">
-                  <span className="truncate">{activeTarget.name}</span>
-                  {activeTarget.type === "DIRECT" && <UserStatusBadge isOnline={activeTarget.isOnline} />}
-                </h2>
-                <p className="text-[9px] text-slate-500 font-mono truncate">Room UUID: {activeTarget.id}</p>
+
+              {/* Action Calling Buttons */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleInitiateAudioCall}
+                  className="p-2.5 rounded-2xl bg-slate-800/80 hover:bg-emerald-600/20 text-slate-300 hover:text-emerald-400 text-xs font-mono transition-all cursor-pointer border border-slate-700/80 shadow-md"
+                  title="Start Voice Call"
+                >
+                  🎙️
+                </button>
+                <button
+                  onClick={handleInitiateVideoCall}
+                  className="p-2.5 rounded-2xl bg-slate-800/80 hover:bg-indigo-600/20 text-slate-300 hover:text-indigo-400 text-xs font-mono transition-all cursor-pointer border border-slate-700/80 shadow-md"
+                  title="Start Video Call"
+                >
+                  📹
+                </button>
               </div>
             </div>
 
-            {/* Context Panel Toggle Button */}
-            <button
-              onClick={() => setIsContextOpen(!isContextOpen)}
-              className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 rounded-2xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-xs font-mono transition-all cursor-pointer shadow-sm"
-            >
-              <span>{isContextOpen ? 'Hide Info 👁️' : 'Show Info ℹ️'}</span>
-            </button>
+            {/* Degradation Warning Badge */}
+            {isDegradedMode && (
+              <div className="bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-xl flex items-center justify-between animate-in fade-in">
+                <div className="flex items-center space-x-2">
+                  <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                  <span className="text-[10px] font-mono text-amber-300">
+                    <strong>Degraded Performance:</strong> User Identity container slow/offline. Messaging operates via distributed fallback.
+                  </span>
+                </div>
+                <span className="text-[9px] font-mono uppercase bg-amber-500/20 text-amber-200 px-1.5 py-0.5 rounded border border-amber-500/30">
+                  Fallback Mode
+                </span>
+              </div>
+            )}
           </div>
 
-          {/* INTERNAL SCROLLABLE MESSAGE STREAM FEED */}
+          {/* MESSAGE STREAM */}
           <div className="overflow-y-auto space-y-3.5 my-3 pr-2 scrollbar-thin scrollbar-thumb-slate-800 flex-1 min-h-0 relative">
             {loadingHistory ? (
               <div className="h-full flex items-center justify-center text-slate-500 text-xs font-mono">
-                <span>Loading room history...</span>
+                <span>Loading conversation stream...</span>
               </div>
             ) : currentRoomMessages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-slate-500 text-xs font-mono space-y-1 text-center px-4">
                 <span>No messages in this room yet.</span>
-                <span>Type a message below to start the conversation!</span>
+                <span>Type below to dispatch the first packet!</span>
               </div>
             ) : (
               currentRoomMessages.map((msg, index) => {
@@ -559,7 +692,7 @@ export default function ChatDashboard() {
             <div ref={chatBottomRef} />
           </div>
 
-          {/* 📎 FILE ATTACHMENT PREVIEW CHIP */}
+          {/* FILE ATTACHMENT PREVIEW */}
           {selectedFile && (
             <div className="px-3 py-2.5 bg-slate-950 border border-slate-800/80 rounded-2xl flex items-center justify-between mb-2 shrink-0 animate-in fade-in">
               <div className="flex items-center gap-3 truncate">
@@ -587,7 +720,7 @@ export default function ChatDashboard() {
           {isUploading && (
             <div className="space-y-1 mb-2 shrink-0">
               <div className="flex justify-between text-[10px] font-mono text-indigo-400">
-                <span>Uploading to Cloudinary Cloud...</span>
+                <span>Uploading attachment to cloud...</span>
                 <span>{uploadProgress}%</span>
               </div>
               <div className="h-1.5 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800">
@@ -599,9 +732,8 @@ export default function ChatDashboard() {
             </div>
           )}
 
-          {/* Text Input Entry Form */}
+          {/* TEXT INPUT FORM */}
           <form onSubmit={handleSendMessage} className="pt-3 border-t border-slate-800/80 flex gap-2 shrink-0 items-center">
-            {/* Hidden File Input */}
             <input
               type="file"
               ref={fileInputRef}
@@ -609,7 +741,6 @@ export default function ChatDashboard() {
               accept="image/*,application/pdf,.txt,.doc,.docx"
               className="hidden"
             />
-            {/* Attachment Button */}
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -637,7 +768,7 @@ export default function ChatDashboard() {
                   }
                 }, 1500);
               }}
-              placeholder={isConnected ? (isUploading ? "Uploading..." : `Message ${activeTarget.name}...`) : "WebSocket offline..."}
+              placeholder={isConnected ? (isUploading ? "Uploading..." : `Message ${activeTarget.name}...`) : "Gateway reconnecting..."}
               disabled={!isConnected || isUploading}
               className="flex-1 bg-slate-950 border border-slate-800 focus:border-indigo-500/50 rounded-2xl px-4 py-3 text-xs text-white placeholder-slate-500 outline-none transition-all disabled:opacity-50 shadow-inner"
             />
@@ -651,10 +782,34 @@ export default function ChatDashboard() {
           </form>
         </section>
 
-        {/* RIGHT PANE: CONTEXT & METADATA PANEL */}
+        {/* RIGHT PANEL: CONTEXT METADATA */}
         <ChatContextPanel activeTarget={activeTarget} isOpen={isContextOpen} onClose={() => setIsContextOpen(false)} />
 
       </main>
+
+      {/* CALL MODALS */}
+      <AudioCallModal 
+        isOpen={isAudioActive}
+        onClose={() => endCall(true)}
+        callerName={activeTarget.name}
+        callStatus={callStatus}
+        localStream={localStream}
+        remoteStream={remoteStream}
+        onAccept={null}
+        onReject={() => endCall(true)}
+      />
+
+      <VideoCallModal 
+        isOpen={isVideoActive}
+        onClose={() => endCall(true)}
+        callerName={activeTarget.name}
+        callStatus={callStatus}
+        localStream={localStream}
+        remoteStream={remoteStream}
+        onAccept={null}
+        onReject={() => endCall(true)}
+      />
+
     </div>
   );
 }

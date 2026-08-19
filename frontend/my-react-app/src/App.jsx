@@ -1,18 +1,15 @@
 import React from "react";
-import { AuthProvider } from "./context/AuthContext"; 
 import { ToastProvider } from "./context/ToastContext";
 import AppRoutes from "./routes/AppRoutes";
-import PresenceTracker from "./components/PresenceTracker"; // 👈 IMPORT HERE
+import PresenceTracker from "./components/PresenceTracker";
+import GlobalCallHandler from "./components/GlobalCallHandler";
 
-function App() {
+export default function App() {
   return (
     <ToastProvider>
-      <AuthProvider>
-        <PresenceTracker /> {/* ⚡ AUTOMATIC REAL-TIME PRESENCE ENGINE */}
-        <AppRoutes />
-      </AuthProvider>
+      <PresenceTracker /> 
+      <GlobalCallHandler />
+      <AppRoutes />
     </ToastProvider>
   );
 }
-
-export default App;

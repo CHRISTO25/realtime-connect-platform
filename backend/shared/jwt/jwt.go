@@ -3,21 +3,22 @@ package jwt
 import (
 	"errors"
 	"fmt"
-	"time"
-
 	"github.com/golang-jwt/jwt/v5"
+	"time"
 )
 
-// CustomClaims now accepts a string UUID for the user identification payload
+// CustomClaims now includes UserID and Role for role-based authorization middleware
 type CustomClaims struct {
 	UserID string `json:"user_id"`
+	Role   string `json:"role"` // 👈 ADDED: Supports admin and user privilege levels
 	jwt.RegisteredClaims
 }
 
-// GenerateToken accepts a string userID to perfectly match your UUID strategy
-func GenerateToken(userID string, secretKey string, duration time.Duration) (string, error) {
+// GenerateToken now accepts userID and role to bake permissions into the signed payload
+func GenerateToken(userID string, role string, secretKey string, duration time.Duration) (string, error) {
 	claims := CustomClaims{
 		UserID: userID,
+		Role:   role, // 👈 EMBED ROLE INTO JWT CLAIMS
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(duration)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -35,13 +36,9 @@ func GenerateToken(userID string, secretKey string, duration time.Duration) (str
 	return signedToken, nil
 }
 
-// === DAY 6 ADDITION: MISSING VALIDATE TOKEN FUNCTION ===
-
 // ValidateToken parses, validates signature, and extracts claims from an incoming token string
 func ValidateToken(tokenString string, secretKey string) (*CustomClaims, error) {
-	// 1. Parse the token using your specific CustomClaims struct template blueprint
 	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
-		// Defensive validation: Ensure the token was signed with the expected HMAC method
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
@@ -52,7 +49,6 @@ func ValidateToken(tokenString string, secretKey string) (*CustomClaims, error) 
 		return nil, err
 	}
 
-	// 2. Cryptographically assert that the token claims and lifecycle signatures match
 	claims, ok := token.Claims.(*CustomClaims)
 	if !ok || !token.Valid {
 		return nil, errors.New("invalid token or expired claims layout")

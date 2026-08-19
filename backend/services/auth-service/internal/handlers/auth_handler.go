@@ -36,7 +36,7 @@ func (h *AuthHandler) HealthCheck(c *gin.Context) {
 }
 
 // Register handles POST /api/v1/auth/register
-// Story: Validates payload -> calls service layer to create user and trigger profile sync -> responds with outcome.
+// Story: Validates payload -> stages data in Redis -> sends OTP via Gmail SMTP (No DB write yet).
 func (h *AuthHandler) Register(c *gin.Context) {
 	var req dto.RegisterRequest
 
@@ -50,8 +50,8 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// Step 2: Delegate user registration and profile sync execution to the service layer.
-	res, err := h.authService.Register(c.Request.Context(), req)
+	// Step 2: Delegate registration staging & OTP dispatch to the service layer.
+	err := h.authService.Register(c.Request.Context(), req)
 	if err != nil {
 		// Handle business domain errors specifically.
 		if errors.Is(err, services.ErrEmailAlreadyExists) {
@@ -66,7 +66,6 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		// Catch unhandled internal failures and log them
 		log.Printf("[Register Error]: %v", err)
 
-		// 🔑 PASS ACTUAL ERROR TO CLIENT SO WE CAN DIAGNOSE IT IMMEDIATELY
 		response.Error(
 			c,
 			http.StatusInternalServerError,
@@ -75,11 +74,11 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// Step 3: Respond with 200/201 OK and formatted user data.
+	// Step 3: Respond indicating OTP code has been dispatched.
 	response.Success(
 		c,
-		"User registered successfully",
-		res,
+		"Verification OTP sent to email. Please verify to complete registration.",
+		gin.H{"email": req.Email},
 	)
 }
 
@@ -179,4 +178,25 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	}
 
 	response.Success(c, "Logged out successfully from all devices", nil)
+}
+
+// VerifyEmail processes incoming OTP confirmation codes, commits the user to PostgreSQL, and initializes their profile
+func (h *AuthHandler) VerifyEmail(c *gin.Context) {
+	var req struct {
+		Email string `json:"email" binding:"required,email"`
+		Code  string `json:"code" binding:"required,len=6"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, "Invalid request payload or code format")
+		return
+	}
+
+	res, err := h.authService.VerifyEmailAndCommit(c.Request.Context(), req.Email, req.Code)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	response.Success(c, "Email verified, account registered, and profile created successfully", res)
 }

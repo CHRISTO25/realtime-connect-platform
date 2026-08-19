@@ -6,121 +6,205 @@ import (
 	"auth-service/internal/repositories"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
+	"net/smtp"
 	"os"
 	"shared/jwt"
 	"strings"
 	"time"
 
-	"github.com/google/uuid" // ◄ Make sure github.com/google/uuid is imported
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var ErrEmailAlreadyExists = errors.New("email already registered")
 var ErrInvalidCredentials = errors.New("invalid email or password")
+var ErrUserBanned = errors.New("access denied: your account has been suspended by an administrator")
+var ErrInvalidOTP = errors.New("invalid or expired verification code")
 
 type AuthServiceImpl struct {
-	userRepo  repositories.UserRepository
-	jwtSecret string
+	userRepo    repositories.UserRepository
+	redisClient *redis.Client
+	jwtSecret   string
 }
 
-func NewAuthService(repo repositories.UserRepository, jwtSecret string) AuthService {
+func NewAuthService(repo repositories.UserRepository, redisClient *redis.Client, jwtSecret string) AuthService {
 	return &AuthServiceImpl{
-		userRepo:  repo,
-		jwtSecret: jwtSecret,
+		userRepo:    repo,
+		redisClient: redisClient,
+		jwtSecret:   jwtSecret,
 	}
 }
 
-func (s *AuthServiceImpl) Register(ctx context.Context, req dto.RegisterRequest) (*dto.RegisterResponse, error) {
-	// Step 1: Check existing email
+// Temporary data layout for pre-verification staging in Redis
+type StagedUser struct {
+	Username       string `json:"username"`
+	Email          string `json:"email"`
+	HashedPassword string `json:"hashed_password"`
+}
+
+// 1️⃣ Step 1: Register stages the user data in Redis and triggers Gmail SMTP OTP (No Database Write Yet)
+func (s *AuthServiceImpl) Register(ctx context.Context, req dto.RegisterRequest) error {
 	existingUser, err := s.userRepo.FindByEmail(ctx, req.Email)
 	if err != nil {
-		return nil, fmt.Errorf("registration database scan failed: %w", err)
+		return fmt.Errorf("registration database scan failed: %w", err)
 	}
 	if existingUser != nil {
-		return nil, ErrEmailAlreadyExists
+		return ErrEmailAlreadyExists
 	}
 
-	// Step 2: Hash password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		return nil, fmt.Errorf("password hashing runtime failure: %w", err)
+		return fmt.Errorf("password hashing failure: %w", err)
 	}
 
-	// Step 3: Explicitly generate a valid UUID before creating the model
+	// Generate secure cryptographic 6-digit OTP
+	n, err := rand.Int(rand.Reader, big.NewInt(900000))
+	if err != nil {
+		return fmt.Errorf("otp generation failed: %w", err)
+	}
+	otpCode := fmt.Sprintf("%06d", n.Int64()+100000)
+
+	staged := StagedUser{
+		Username:       req.Username,
+		Email:          req.Email,
+		HashedPassword: string(hashedPassword),
+	}
+
+	stagedJSON, err := json.Marshal(staged)
+	if err != nil {
+		return fmt.Errorf("failed to marshal staged user: %w", err)
+	}
+
+	if s.redisClient != nil {
+		pipe := s.redisClient.Pipeline()
+		pipe.Set(ctx, "otp:"+req.Email, otpCode, 10*time.Minute)
+		pipe.Set(ctx, "staged:"+req.Email, stagedJSON, 10*time.Minute)
+		_, err = pipe.Exec(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to cache otp/staged data in redis: %w", err)
+		}
+	}
+
+	// Dispatch SMTP email in background routine
+	go s.sendOTPEmail(req.Email, otpCode)
+
+	return nil
+}
+
+// Helper: Send OTP via Gmail SMTP
+func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
+	smtpHost := os.Getenv("SMTP_HOST")
+	smtpPort := os.Getenv("SMTP_PORT")
+	smtpUser := os.Getenv("SMTP_USER")
+	smtpPass := os.Getenv("SMTP_PASS")
+	smtpFrom := os.Getenv("SMTP_FROM")
+
+	if smtpHost == "" {
+		smtpHost = "smtp.gmail.com"
+	}
+	if smtpPort == "" {
+		smtpPort = "587"
+	}
+
+	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
+	msg := []byte(fmt.Sprintf("To: %s\r\n"+
+		"Subject: Chatting App Account Verification Code\r\n"+
+		"Content-Type: text/plain; charset=UTF-8\r\n\r\n"+
+		"Hello,\n\nYour account activation code is: %s\nThis code will expire in 10 minutes.\n\nRegards,\nChatting App Support", toEmail, otp))
+
+	addr := fmt.Sprintf("%s:%s", smtpHost, smtpPort)
+	err := smtp.SendMail(addr, auth, smtpFrom, []string{toEmail}, msg)
+	if err != nil {
+		log.Printf("[SMTP ERROR] Failed to send OTP to %s: %v", toEmail, err)
+	} else {
+		log.Printf("[SMTP SUCCESS] Verification OTP sent successfully to %s", toEmail)
+	}
+}
+
+// 2️⃣ Step 2: Verify OTP, commit user to Postgres, and initialize user-service profile
+func (s *AuthServiceImpl) VerifyEmailAndCommit(ctx context.Context, email string, code string) (*dto.RegisterResponse, error) {
+	if s.redisClient == nil {
+		return nil, errors.New("redis cache client uninitialized")
+	}
+
+	storedOTP, err := s.redisClient.Get(ctx, "otp:"+email).Result()
+	if err != nil || storedOTP != code {
+		return nil, ErrInvalidOTP
+	}
+
+	stagedJSON, err := s.redisClient.Get(ctx, "staged:"+email).Result()
+	if err != nil {
+		return nil, errors.New("registration session expired or not found. Please restart registration")
+	}
+
+	var staged StagedUser
+	if err := json.Unmarshal([]byte(stagedJSON), &staged); err != nil {
+		return nil, errors.New("failed to parse staged registration profile")
+	}
+
 	generatedUUID := uuid.New().String()
-
 	newUser := &model.User{
-		ID:       generatedUUID, // ◄ EXPLICITLY ASSIGN UUID HERE
-		Username: req.Username,
-		Email:    req.Email,
-		Password: string(hashedPassword),
+		ID:       generatedUUID,
+		Username: staged.Username,
+		Email:    staged.Email,
+		Password: staged.HashedPassword,
+		Role:     "user",
+		IsBanned: false,
 	}
 
+	// Commit user to PostgreSQL Database now
 	if err := s.userRepo.Create(ctx, newUser); err != nil {
 		return nil, fmt.Errorf("failed to commit user record: %w", err)
 	}
 
-	// Double-check ID is present
-	if newUser.ID == "" {
-		newUser.ID = generatedUUID
-	}
+	// Clean up Redis temporary keys
+	_, _ = s.redisClient.Del(ctx, "otp:"+email, "staged:"+email).Result()
 
-	// Step 4: Call user-service synchronously
+	// ⚡ 3️⃣ AUTO-CREATE PROFILE IN USER-SERVICE CONTAINER VIA INTERNAL BRIDGE
 	userServiceBase := os.Getenv("USER_SERVICE_URL")
 	if userServiceBase == "" {
-		userServiceBase = "http://localhost:8002"
+		userServiceBase = "http://user-service:8002"
 	}
 	userServiceBase = strings.TrimSuffix(userServiceBase, "/")
 
 	payload := map[string]string{
 		"user_id":      newUser.ID,
 		"display_name": newUser.Username,
+		"email":        newUser.Email,
 	}
 
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
-		_ = s.userRepo.Delete(ctx, newUser.ID)
-		return nil, fmt.Errorf("failed to encode profile payload: %w", err)
+		log.Printf("[SYNC WARNING] Failed to encode profile payload: %v", err)
+		return &dto.RegisterResponse{
+			ID:        newUser.ID,
+			Username:  newUser.Username,
+			Email:     newUser.Email,
+			CreatedAt: newUser.CreatedAt.Format("2006-01-02 15:04:05"),
+		}, nil
 	}
 
 	syncURL := fmt.Sprintf("%s/api/v1/users/internal/init", userServiceBase)
-
-	// Create explicit HTTP POST Request with JSON Body and Headers
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", syncURL, bytes.NewBuffer(jsonBytes))
-	if err != nil {
-		_ = s.userRepo.Delete(ctx, newUser.ID)
-		return nil, fmt.Errorf("failed to form inter-service request: %w", err)
+	if err == nil {
+		httpReq.Header.Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Do(httpReq)
+		if err == nil {
+			defer resp.Body.Close()
+			log.Printf("[SYNC SUCCESS] Profile created in user-service for User ID %s", newUser.ID)
+		} else {
+			log.Printf("[SYNC ERROR] user-service unreachable: %v", err)
+		}
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(httpReq)
-
-	// Handle network error & trigger rollback
-	if err != nil {
-		log.Printf("[SYNC ERROR] Unreachable user-service at %s: %v", syncURL, err)
-		_ = s.userRepo.Delete(ctx, newUser.ID)
-		return nil, fmt.Errorf("profile initialization failed: user-service unreachable at %s", syncURL)
-	}
-	defer resp.Body.Close()
-
-	// Handle HTTP non-20x responses & trigger rollback
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		buf := new(bytes.Buffer)
-		_, _ = buf.ReadFrom(resp.Body)
-		errBody := buf.String()
-
-		log.Printf("[SYNC ERROR] user-service returned status %d. Details: %s", resp.StatusCode, errBody)
-		_ = s.userRepo.Delete(ctx, newUser.ID)
-		return nil, fmt.Errorf("user-service profile initialization failed (status %d): %s", resp.StatusCode, errBody)
-	}
-
-	log.Printf("[SYNC SUCCESS] Profile created in user-service for User ID %s", newUser.ID)
 
 	return &dto.RegisterResponse{
 		ID:        newUser.ID,
@@ -128,6 +212,12 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req dto.RegisterRequest)
 		Email:     newUser.Email,
 		CreatedAt: newUser.CreatedAt.Format("2006-01-02 15:04:05"),
 	}, nil
+}
+
+// ⚠️ Legacy placeholder for interface compatibility if called elsewhere
+func (s *AuthServiceImpl) VerifyEmail(ctx context.Context, email string, code string) error {
+	_, err := s.VerifyEmailAndCommit(ctx, email, code)
+	return err
 }
 
 func (s *AuthServiceImpl) Login(ctx context.Context, req dto.LoginRequest) (*dto.TokenResponse, error) {
@@ -141,17 +231,21 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req dto.LoginRequest) (*dto
 		return nil, ErrInvalidCredentials
 	}
 
+	if user.IsBanned {
+		return nil, ErrUserBanned
+	}
+
 	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password))
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
 
-	accessToken, err := jwt.GenerateToken(user.ID, s.jwtSecret, time.Minute*15)
+	accessToken, err := jwt.GenerateToken(user.ID, user.Role, s.jwtSecret, time.Minute*15)
 	if err != nil {
 		return nil, fmt.Errorf("access token generation failed: %w", err)
 	}
 
-	refreshToken, err := jwt.GenerateToken(user.ID, s.jwtSecret, time.Hour*24*7)
+	refreshToken, err := jwt.GenerateToken(user.ID, user.Role, s.jwtSecret, time.Hour*24*7)
 	if err != nil {
 		return nil, fmt.Errorf("refresh token generation failed: %w", err)
 	}
@@ -191,6 +285,12 @@ func (s *AuthServiceImpl) RefreshSession(ctx context.Context, req dto.RefreshReq
 		return nil, errors.New("invalid or expired refresh token")
 	}
 
+	user, err := s.userRepo.FindByID(ctx, claims.UserID)
+	if err != nil || user == nil || user.IsBanned {
+		_ = s.userRepo.RevokeUserTokens(ctx, claims.UserID)
+		return nil, ErrUserBanned
+	}
+
 	storedToken, err := s.userRepo.GetRefreshToken(ctx, req.RefreshToken)
 	if err != nil || storedToken == nil {
 		return nil, errors.New("refresh token not recognized")
@@ -210,11 +310,11 @@ func (s *AuthServiceImpl) RefreshSession(ctx context.Context, req dto.RefreshReq
 		return nil, err
 	}
 
-	newAccess, err := jwt.GenerateToken(claims.UserID, s.jwtSecret, 15*time.Minute)
+	newAccess, err := jwt.GenerateToken(claims.UserID, claims.Role, s.jwtSecret, 15*time.Minute)
 	if err != nil {
 		return nil, err
 	}
-	newRefresh, err := jwt.GenerateToken(claims.UserID, s.jwtSecret, 7*24*time.Hour)
+	newRefresh, err := jwt.GenerateToken(claims.UserID, claims.Role, s.jwtSecret, 7*24*time.Hour)
 	if err != nil {
 		return nil, err
 	}

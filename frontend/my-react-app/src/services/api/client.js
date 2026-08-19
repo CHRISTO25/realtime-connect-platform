@@ -1,90 +1,174 @@
 import axios from 'axios';
 
-export const authApi = axios.create({
-  baseURL: 'http://localhost:8001/api/v1/auth',
-  headers: { 'Content-Type': 'application/json' },
-});
+// ⚡ Dynamic Environment Resolution (Vite / Production Fallback)
+const API_GATEWAY_URL = 
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_GATEWAY_URL) || 
+  'http://localhost:8080';
 
+// 1. Universal API instance for User, Friend, Profile, and Chat actions
 export const userApi = axios.create({
-  baseURL: 'http://localhost:8002/api/v1/users',
+  baseURL: API_GATEWAY_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  withCredentials: true,
+  timeout: 15000, // 15-second request timeout safeguard
 });
 
-// Auto-attach Bearer Token
+// 2. Universal API instance for Authentication actions (login, register, refresh)
+export const authApi = axios.create({
+  baseURL: API_GATEWAY_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  withCredentials: true,
+  timeout: 10000,
+});
+
+// --- CONCURRENCY LOCKING FOR TOKEN REFRESH ROTATION ---
+let isRefreshing = false;
+let failedQueue = [];
+
+const processQueue = (error, token = null) => {
+  failedQueue.forEach(prom => {
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve(token);
+    }
+  });
+  failedQueue = [];
+};
+
+// 3. Request Interceptor: Auto-attach Bearer Token & normalize shorthand paths
 userApi.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('access_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+
+    // Auto-normalize shorthand endpoints to match backend microservice prefixes
+    if (config.url) {
+      const shorthandRoutes = ['/friends', '/search', '/allProfile', '/heartbeat', '/block'];
+      const matchesShorthand = shorthandRoutes.some(route => config.url.startsWith(route));
+
+      if (matchesShorthand) {
+        config.url = `/api/v1/users${config.url}`;
+      } else if (config.url.startsWith('/profile') && !config.url.startsWith('/api/v1/users/profile')) {
+        config.url = `/api/v1/users${config.url}`;
+      }
+    }
+
     return config;
   },
   (error) => Promise.reject(error)
 );
 
-// Response Interceptor: 401 Refresh Token + Automatic Day 13 Toast Error Dispatching
-userApi.interceptors.response.use(
+// 4. Response Interceptor for authApi: Track authentication endpoint errors uniformly
+authApi.interceptors.response.use(
   (response) => response,
-  async (error) => {
-    const originalRequest = error.config;
-
-    // 1. Handle 401 Unauthorized (Refresh Token Flow)
-    if (error.response?.status === 401 && !originalRequest._retry) {
-      originalRequest._retry = true;
-
-      try {
-        const refreshToken = localStorage.getItem('refresh_token');
-        if (!refreshToken) throw new Error('No refresh token');
-
-        const response = await authApi.post('/refresh', {
-          refresh_token: refreshToken,
-        });
-
-        if (response.data && response.data.success) {
-          const newAccessToken = response.data.data.access_token;
-          const newRefreshToken = response.data.data.refresh_token;
-
-          localStorage.setItem('access_token', newAccessToken);
-          if (newRefreshToken) {
-            localStorage.setItem('refresh_token', newRefreshToken);
-          }
-
-          originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
-          return userApi(originalRequest);
-        }
-      } catch (refreshErr) {
-        localStorage.clear();
-        window.location.href = '/login';
-        return Promise.reject(refreshErr);
-      }
-    }
-
-    // 2. ⚡ DAY 13: Intercept Structural Validation & Server Errors
+  (error) => {
     const errorData = error.response?.data;
-    let formattedMsg = 'An unexpected system error occurred';
+    let formattedMsg =
+      errorData?.message || errorData?.error || error.message || 'Authentication service error';
 
-    if (errorData) {
-      if (errorData.message) {
-        formattedMsg = errorData.message;
-      }
-
-      // Format Field Validation Errors Map (e.g. {"receiver_id": "receiver_id is required"})
-      if (errorData.errors && typeof errorData.errors === 'object') {
-        const validationMap = Object.entries(errorData.errors)
-          .map(([field, msg]) => `${field}: ${msg}`)
-          .join(' | ');
-        formattedMsg = `Validation Error → ${validationMap}`;
-      }
-    } else if (error.message) {
-      formattedMsg = error.message;
-    }
-
-    // Dispatch custom event to trigger ToastProvider silently
     window.dispatchEvent(
       new CustomEvent('api_error', {
-        detail: { message: formattedMsg, type: 'error' },
+        detail: { message: formattedMsg, type: 'error', status: error.response?.status },
       })
     );
 
     return Promise.reject(error);
   }
 );
+
+// 5. Response Interceptor for userApi: Thread-Safe 401 Auto-Refresh & Error Event Dispatching
+userApi.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    // Handle 401 Unauthorized (Refresh Token Flow with Concurrency Lock)
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        })
+          .then(token => {
+            originalRequest.headers.Authorization = `Bearer ${token}`;
+            return userApi(originalRequest);
+          })
+          .catch(err => Promise.reject(err));
+      }
+
+      originalRequest._retry = true;
+      isRefreshing = true;
+
+      try {
+        const refreshToken = localStorage.getItem('refresh_token');
+        if (!refreshToken) throw new Error('No refresh token found');
+
+        const response = await authApi.post('/api/v1/auth/refresh', {
+          refresh_token: refreshToken,
+        });
+
+        if (response.data && (response.data.success || response.data.data)) {
+          const resData = response.data.data || response.data;
+          const newAccessToken = resData.access_token || resData.token;
+          const newRefreshToken = resData.refresh_token;
+
+          localStorage.setItem('access_token', newAccessToken);
+          if (newRefreshToken) {
+            localStorage.setItem('refresh_token', newRefreshToken);
+          }
+
+          userApi.defaults.headers.common['Authorization'] = `Bearer ${newAccessToken}`;
+          originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+
+          processQueue(null, newAccessToken);
+          isRefreshing = false;
+
+          return userApi(originalRequest);
+        }
+      } catch (refreshErr) {
+        processQueue(refreshErr, null);
+        isRefreshing = false;
+
+        // Clean storage and trigger clean session termination
+        localStorage.clear();
+        window.dispatchEvent(
+          new CustomEvent('session_expired', { detail: { message: 'Session expired. Please log in again.' } })
+        );
+        
+        // Redirect safeguard
+        if (!window.location.pathname.includes('/login')) {
+          window.location.href = '/login';
+        }
+
+        return Promise.reject(refreshErr);
+      }
+    }
+
+    // Parse and dispatch robust error messages for UI toasts/alerts
+    const errorData = error.response?.data;
+    let formattedMsg =
+      errorData?.message || errorData?.error || error.message || 'An unexpected system error occurred';
+
+    if (errorData?.errors && typeof errorData.errors === 'object') {
+      formattedMsg = Object.entries(errorData.errors)
+        .map(([field, msg]) => `${field}: ${msg}`)
+        .join(' | ');
+    }
+
+    window.dispatchEvent(
+      new CustomEvent('api_error', {
+        detail: { message: formattedMsg, type: 'error', status: error.response?.status },
+      })
+    );
+
+    return Promise.reject(error);
+  }
+);
+
+export default userApi;

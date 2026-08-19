@@ -1,24 +1,26 @@
 package routes
 
 import (
-	"github.com/gin-gonic/gin"
 	"shared/middleware"
 	"user-service/internal/handler"
+
+	"github.com/gin-gonic/gin"
 )
 
 func SetupRoutes(router *gin.Engine, h *handler.UserHandler, friendH *handler.FriendHandler, blockH *handler.BlockHandler, jwtSecret string) {
+	// 1. Base User Service Group (/api/v1/users)
 	v1 := router.Group("/api/v1/users")
 	{
 		v1.POST("/internal/init", h.InitProfile)
 		v1.GET("/profile/:id", h.GetProfile)
-		v1.POST("/presence/offline/beacon", h.MarkOffline) // Public endpoint for Beacon API on tab exit
+		v1.POST("/presence/offline/beacon", h.MarkOffline)
 
 		protected := v1.Group("")
 		protected.Use(middleware.AuthMiddleware(jwtSecret))
 		{
 			protected.PUT("/profile", h.UpdateProfile)
-			protected.POST("/profile/avatar", h.UploadAvatar) // ◄ AVATAR UPLOAD ROUTE
-			protected.POST("/profile/cover", h.UploadCover)   // ◄ COVER UPLOAD ROUTE
+			protected.POST("/profile/avatar", h.UploadAvatar)
+			protected.POST("/profile/cover", h.UploadCover)
 			protected.GET("/allProfile", h.GetallUsers)
 			protected.GET("/search", h.SearchUsers)
 			protected.POST("/logout", h.Logout)
@@ -36,7 +38,27 @@ func SetupRoutes(router *gin.Engine, h *handler.UserHandler, friendH *handler.Fr
 			protected.DELETE("/block/:id", blockH.UnblockUser)
 			protected.GET("/block/list", blockH.GetBlockedList)
 			protected.GET("/block/ids", blockH.GetBlockedIDs)
-
 		}
+	}
+
+	// 2. Direct Fallback Shorthands
+	directProtected := router.Group("")
+	directProtected.Use(middleware.AuthMiddleware(jwtSecret))
+	{
+		directProtected.POST("/heartbeat", h.Heartbeat)
+		directProtected.GET("/search", h.SearchUsers)
+		directProtected.GET("/allProfile", h.GetallUsers)
+		directProtected.GET("/friends/list", friendH.GetFriendsList)
+		directProtected.GET("/friends/pending", friendH.GetPendingRequests)
+		directProtected.GET("/profile", h.GetProfile)
+		directProtected.PUT("/profile", h.UpdateProfile)
+	}
+
+	// 3. ⚡ Admin Control Group matching exactly what the gateway proxies: /api/v1/admin
+	adminGroup := router.Group("/api/v1/admin")
+	adminGroup.Use(middleware.AuthMiddleware(jwtSecret))
+	{
+		adminGroup.GET("/users", h.AdminGetUsers)
+		adminGroup.PATCH("/users/:id/ban", h.AdminToggleBan)
 	}
 }

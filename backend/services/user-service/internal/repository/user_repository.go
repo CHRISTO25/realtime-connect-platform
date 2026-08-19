@@ -18,9 +18,14 @@ func NewProfileRepository(db *gorm.DB) ProfileRepository {
 	return &ProfileRepositoryImpl{db: db}
 }
 
-// CreateProfile inserts a new profile row into Neon DB
+// CreateProfile safely inserts or updates a profile row into Neon DB
 func (r *ProfileRepositoryImpl) CreateProfile(ctx context.Context, profile *model.UserProfile) error {
-	return r.db.WithContext(ctx).Create(profile).Error
+	return r.db.WithContext(ctx).
+		Where(model.UserProfile{UserID: profile.UserID}).
+		Attrs(model.UserProfile{
+			DisplayName: profile.DisplayName,
+		}).
+		FirstOrCreate(profile).Error
 }
 
 // FindByUserID queries by the indexed unique column 'user_id'
@@ -167,4 +172,22 @@ func (r *ProfileRepositoryImpl) UpdateStatus(ctx context.Context, userIDStr stri
 			"is_online": isOnline,
 			"last_seen": time.Now(),
 		}).Error
+}
+func (r *ProfileRepositoryImpl) AdminGetAllUsers(ctx context.Context, query string) ([]model.UserProfile, error) {
+	var profiles []model.UserProfile
+	dbQuery := r.db.WithContext(ctx)
+
+	if query != "" {
+		dbQuery = dbQuery.Where("display_name ILIKE ? OR email ILIKE ?", "%"+query+"%", "%"+query+"%")
+	}
+
+	err := dbQuery.Find(&profiles).Error
+	return profiles, err
+}
+
+func (r *ProfileRepositoryImpl) AdminSetUserBanStatus(ctx context.Context, userID string, isBanned bool) error {
+	return r.db.WithContext(ctx).
+		Model(&model.UserProfile{}).
+		Where("user_id = ? OR id = ?", userID, userID).
+		Update("is_banned", isBanned).Error
 }

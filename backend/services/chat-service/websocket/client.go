@@ -14,7 +14,7 @@ const (
 	writeWait      = 10 * time.Second
 	pongWait       = 60 * time.Second
 	pingPeriod     = (pongWait * 9) / 10
-	maxMessageSize = 4096
+	maxMessageSize = 512 * 1024 // ⚡ 512 KB to support large media payload previews & SDP candidates
 )
 
 type Client struct {
@@ -26,9 +26,10 @@ type Client struct {
 }
 
 type WSIncomingFrame struct {
-	Type    string `json:"type"`
-	RoomID  string `json:"room_id"`
-	Content string `json:"content"`
+	Type     string `json:"type"`
+	RoomID   string `json:"room_id"`
+	TargetID string `json:"target_id,omitempty"` // Specific receiver for WebRTC P2P
+	Content  string `json:"content"`
 }
 
 type WSOutgoingFrame struct {
@@ -36,6 +37,7 @@ type WSOutgoingFrame struct {
 	ID        string    `json:"id,omitempty"`
 	RoomID    string    `json:"room_id,omitempty"`
 	SenderID  string    `json:"sender_id,omitempty"`
+	TargetID  string    `json:"target_id,omitempty"` // ⚡ Day 36: Propagate TargetID over Redis mesh
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -64,7 +66,7 @@ func (c *Client) ReadPump() {
 			continue
 		}
 
-		// ⚡ DAY 20: Handle Ephemeral Typing Indicator Frames (No DB Overhead)
+		// ⚡ Handle Ephemeral Typing Indicators
 		if frame.Type == "TYPING_START" || frame.Type == "TYPING_STOP" {
 			roomID := frame.RoomID
 			if roomID == "" {
@@ -80,12 +82,11 @@ func (c *Client) ReadPump() {
 			}
 
 			outBytes, _ := json.Marshal(typingOutbound)
-			// Broadcast instantly in memory to active room clients
 			c.Manager.Broadcast <- outBytes
 			continue
 		}
 
-		// ⚡ DAY 21: Handle Delivery & Read Receipt Acknowledgment Frames
+		// ⚡ Handle Delivery & Read Receipt Acknowledgments
 		if frame.Type == "DELIVERED_ACK" || frame.Type == "READ_ACK" {
 			roomID := frame.RoomID
 			if roomID == "" {
@@ -94,33 +95,51 @@ func (c *Client) ReadPump() {
 
 			receiptOutbound := WSOutgoingFrame{
 				Type:      frame.Type,
-				ID:        frame.Content, // Target Message ID being acknowledged
+				ID:        frame.Content,
 				RoomID:    roomID,
 				SenderID:  c.UserID,
 				Timestamp: time.Now(),
 			}
 
 			outBytes, _ := json.Marshal(receiptOutbound)
-			// Broadcast receipt update instantly to active room peers
 			c.Manager.Broadcast <- outBytes
 			continue
 		}
 
-		// Handle SEND_MESSAGE event trigger
+		// ⚡ Handle WebRTC Signaling, Ringing, and Rejection via Redis mesh
+		if frame.Type == "CALL_OFFER" || frame.Type == "CALL_ANSWER" || frame.Type == "ICE_CANDIDATE" || frame.Type == "CALL_END" || frame.Type == "CALL_DECLINED" {
+			roomID := frame.RoomID
+			if roomID == "" {
+				roomID = "00000000-0000-0000-0000-000000000001"
+			}
+
+			signalingOutbound := WSOutgoingFrame{
+				Type:      frame.Type,
+				RoomID:    roomID,
+				SenderID:  c.UserID,
+				TargetID:  frame.TargetID,
+				Content:   frame.Content,
+				Timestamp: time.Now(),
+			}
+
+			outBytes, _ := json.Marshal(signalingOutbound)
+			c.Manager.Broadcast <- outBytes
+			continue
+		}
+
+		// ⚡ Handle SEND_MESSAGE: Persist to DB, then publish to Redis Pub/Sub
 		if frame.Type == "SEND_MESSAGE" && frame.Content != "" {
 			roomID := frame.RoomID
 			if roomID == "" {
-				roomID = "00000000-0000-0000-0000-000000000001" // Default Global Lobby Room ID
+				roomID = "00000000-0000-0000-0000-000000000001"
 			}
 
-			// 1. Persist to Neon DB / PostgreSQL via ChatService
 			savedDTO, err := c.ChatService.SaveMessage(c.UserID, roomID, frame.Content)
 			if err != nil {
 				log.Printf("❌ [WS Save Error]: %v", err)
 				continue
 			}
 
-			// 2. Build outgoing broadcast frame
 			outbound := WSOutgoingFrame{
 				Type:      "NEW_MESSAGE",
 				ID:        savedDTO.ID,
@@ -131,8 +150,6 @@ func (c *Client) ReadPump() {
 			}
 
 			outBytes, _ := json.Marshal(outbound)
-
-			// 3. Broadcast to all active sockets
 			c.Manager.Broadcast <- outBytes
 		}
 	}

@@ -40,6 +40,11 @@ func (r *UserRepositoryImpl) FindByID(ctx context.Context, id string) (*model.Us
 	return &user, nil
 }
 
+// Update saves user state changes (such as email verification or admin ban status changes)
+func (r *UserRepositoryImpl) Update(ctx context.Context, user *model.User) error {
+	return r.db.WithContext(ctx).Save(user).Error
+}
+
 // Delete cleans up an orphaned user record if user-service initialization fails
 func (r *UserRepositoryImpl) Delete(ctx context.Context, id string) error {
 	return r.db.WithContext(ctx).Delete(&model.User{}, "id = ?", id).Error

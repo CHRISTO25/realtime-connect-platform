@@ -9,7 +9,8 @@ type UserRepository interface {
 	Create(ctx context.Context, user *model.User) error
 	FindByEmail(ctx context.Context, email string) (*model.User, error)
 	FindByID(ctx context.Context, id string) (*model.User, error)
-	Delete(ctx context.Context, id string) error // ◄ Handled rollback deletion
+	Update(ctx context.Context, user *model.User) error // ◄ ADD THIS METHOD SIGNATURE
+	Delete(ctx context.Context, id string) error        // ◄ Handled rollback deletion
 
 	// Refresh Tokens
 	SaveRefreshToken(ctx context.Context, token *model.RefreshToken) error

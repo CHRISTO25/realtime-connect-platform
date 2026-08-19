@@ -2,10 +2,9 @@ package database
 
 import (
 	"fmt"
-	"log"
-
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"log"
 )
 
 // Connect initializes GORM using a unified cloud database URI connection string.

@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 export default function Login() {
   const { login } = useAuth();
+  const navigate = useNavigate();
+  
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -20,16 +24,24 @@ export default function Login() {
     setSuccessMessage('');
     setIsSubmitting(true);
 
-    if (!email || password.length < 8) {
-      setError('Password must contain at least 8 characters');
+    if (!email || password.length < 6) {
+      setError('Password must contain at least 6 characters');
       setIsSubmitting(false);
       return;
     }
 
     try {
       const result = await login(email, password);
+      
       if (result && result.success) {
-        window.location.href = '/dashboard';
+        // ⚡ Secure Role-Based Routing from Local Storage or Context Response
+        const userRole = result.role || localStorage.getItem('user_role') || 'user';
+
+        if (userRole === 'admin') {
+          navigate('/admin/dashboard', { replace: true });
+        } else {
+          navigate('/dashboard', { replace: true });
+        }
       } else {
         setError(result?.error || 'Invalid credentials.');
         setIsSubmitting(false);
@@ -53,8 +65,6 @@ export default function Login() {
     }
 
     try {
-      // Simulate/Trigger API dispatch for recovery handshake
-      // Replace with your actual auth recovery method if attached to AuthContext
       setTimeout(() => {
         setSuccessMessage('Handshake sequence transmitted. Check your email inbox.');
         setIsSubmitting(false);
@@ -70,7 +80,7 @@ export default function Login() {
          style={{ backgroundColor: 'var(--bg)' }}>
       
       {/* Premium Glassmorphism Cyber Card Container */}
-      <div className="w-full max-w-md rounded-2xl border p-8 transition-all duration-300"
+      <div className="w-full max-w-md rounded-2xl border p-8 transition-all duration-300 shadow-xl"
            style={{ 
              backgroundColor: 'var(--code-bg)', 
              borderColor: 'var(--border)', 
@@ -79,7 +89,7 @@ export default function Login() {
         
         {/* Top Branding Frame */}
         <div className="text-center mb-8">
-          <div className="inline-flex h-12 w-12 rounded-xl flex items-center justify-center font-bold text-white text-xl shadow-md mb-4"
+          <div className="inline-flex h-12 w-12 rounded-xl items-center justify-center font-bold text-white text-xl shadow-md mb-4"
                style={{ background: 'linear-gradient(135deg, var(--accent), #7c3aed)' }}>
             ⚡
           </div>
@@ -132,14 +142,6 @@ export default function Login() {
                 placeholder="name@company.com"
                 className="w-full px-4 py-3 rounded-xl border text-sm font-medium transition-all duration-150 outline-none bg-transparent"
                 style={{ borderColor: 'var(--border)', color: 'var(--text-h)' }}
-                onFocus={(e) => {
-                  e.target.style.borderColor = 'var(--accent)';
-                  e.target.style.boxShadow = '0 0 0 2px var(--accent-bg)';
-                }}
-                onBlur={(e) => {
-                  e.target.style.borderColor = 'var(--border)';
-                  e.target.style.boxShadow = 'none';
-                }}
               />
             </div>
 
@@ -152,35 +154,39 @@ export default function Login() {
                 <button
                   type="button"
                   onClick={() => { setViewMode('forgot'); setError(''); setSuccessMessage(''); }}
-                  className="text-xs font-semibold tracking-wide transition-colors"
+                  className="text-xs font-semibold tracking-wide transition-colors cursor-pointer"
                   style={{ color: 'var(--accent)' }}
                 >
                   Forgot Key?
                 </button>
               </div>
-              <input 
-                type="password" 
-                value={password} 
-                onChange={(e) => setPassword(e.target.value)} 
-                required 
-                placeholder="••••••••••••"
-                className="w-full px-4 py-3 rounded-xl border text-sm font-medium transition-all duration-150 outline-none bg-transparent"
-                style={{ borderColor: 'var(--border)', color: 'var(--text-h)' }}
-                onFocus={(e) => {
-                  e.target.style.borderColor = 'var(--accent)';
-                  e.target.style.boxShadow = '0 0 0 2px var(--accent-bg)';
-                }}
-                onBlur={(e) => {
-                  e.target.style.borderColor = 'var(--border)';
-                  e.target.style.boxShadow = 'none';
-                }}
-              />
+              
+              {/* Password Input with See/Unsee Toggle */}
+              <div className="relative">
+                <input 
+                  type={showPassword ? 'text' : 'password'} 
+                  value={password} 
+                  onChange={(e) => setPassword(e.target.value)} 
+                  required 
+                  placeholder="••••••••••••"
+                  className="w-full px-4 py-3 pr-12 rounded-xl border text-sm font-medium transition-all duration-150 outline-none bg-transparent"
+                  style={{ borderColor: 'var(--border)', color: 'var(--text-h)' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono opacity-60 hover:opacity-100 transition-opacity px-2 py-1 cursor-pointer"
+                  style={{ color: 'var(--text-h)' }}
+                >
+                  {showPassword ? 'HIDE' : 'SHOW'}
+                </button>
+              </div>
             </div>
 
             <button 
               type="submit" 
               disabled={isSubmitting}
-              className="w-full mt-2 py-3.5 px-4 rounded-xl text-sm font-bold tracking-wider uppercase transition-all duration-200 flex items-center justify-center space-x-2"
+              className="w-full mt-2 py-3.5 px-4 rounded-xl text-sm font-bold tracking-wider uppercase transition-all duration-200 flex items-center justify-center space-x-2 cursor-pointer"
               style={{ 
                 backgroundColor: isSubmitting ? 'var(--border)' : 'var(--accent)', 
                 color: isSubmitting ? 'var(--text)' : 'var(--bg)',
@@ -213,21 +219,13 @@ export default function Login() {
                 placeholder="name@company.com"
                 className="w-full px-4 py-3 rounded-xl border text-sm font-medium transition-all duration-150 outline-none bg-transparent"
                 style={{ borderColor: 'var(--border)', color: 'var(--text-h)' }}
-                onFocus={(e) => {
-                  e.target.style.borderColor = 'var(--accent)';
-                  e.target.style.boxShadow = '0 0 0 2px var(--accent-bg)';
-                }}
-                onBlur={(e) => {
-                  e.target.style.borderColor = 'var(--border)';
-                  e.target.style.boxShadow = 'none';
-                }}
               />
             </div>
 
             <button 
               type="submit" 
               disabled={isSubmitting}
-              className="w-full py-3.5 px-4 rounded-xl text-sm font-bold tracking-wider uppercase transition-all duration-200 flex items-center justify-center space-x-2 text-white"
+              className="w-full py-3.5 px-4 rounded-xl text-sm font-bold tracking-wider uppercase transition-all duration-200 flex items-center justify-center space-x-2 text-white cursor-pointer"
               style={{ backgroundColor: isSubmitting ? 'var(--border)' : '#4f46e5' }}
             >
               {isSubmitting ? (
@@ -240,7 +238,7 @@ export default function Login() {
             <button
               type="button"
               onClick={() => { setViewMode('login'); setError(''); setSuccessMessage(''); }}
-              className="w-full text-center text-xs font-bold font-mono tracking-wider uppercase opacity-60 hover:opacity-100 transition-opacity mt-2"
+              className="w-full text-center text-xs font-bold font-mono tracking-wider uppercase opacity-60 hover:opacity-100 transition-opacity mt-2 cursor-pointer"
               style={{ color: 'var(--text-h)' }}
             >
               ← Back to login

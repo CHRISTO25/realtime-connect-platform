@@ -10,6 +10,9 @@ import (
 	"github.com/joho/godotenv"
 
 	"shared/database"
+	"shared/logger"     // 👈 1. Shared Zap structured logger package
+	"shared/middleware" // 👈 2. Shared Prometheus & Trace ID middleware
+
 	"user-service/internal/handler"
 	"user-service/internal/media"
 	"user-service/internal/model"
@@ -18,13 +21,14 @@ import (
 	"user-service/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp" // 👈 3. Prometheus scraper handler
 )
 
 func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Request-ID")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
 
 		if c.Request.Method == "OPTIONS" {
@@ -41,7 +45,11 @@ func main() {
 		log.Println("WARNING: .env file not found, falling back to system environment variables")
 	}
 
-	log.Println("Starting User Service ignition pipeline...")
+	// ⚡ 4. Initialize Zap Structured JSON Logger at absolute startup
+	logger.InitLogger()
+	defer logger.Log.Sync()
+
+	log.Println("Starting User Service ignition pipeline with Zap & Prometheus...")
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -67,13 +75,13 @@ func main() {
 		log.Fatalf("Critical Failure: Could not link up with Database pool: %v", err)
 	}
 
-	// Auto-migrate Day 11 BlockedUser model
+	// Auto-migrate models
 	log.Println("Running GORM schema migrations...")
 	err = db.AutoMigrate(
 		&model.UserProfile{},
 		&model.FriendRequest{},
 		&model.Friend{},
-		&model.BlockedUser{}, // ◄ DAY 11 Table
+		&model.BlockedUser{},
 	)
 	if err != nil {
 		log.Fatalf("Migration Failure: Could not map models: %v", err)
@@ -97,25 +105,35 @@ func main() {
 	blockService := service.NewBlockService(blockRepo)
 	blockHandler := handler.NewBlockHandler(blockService)
 
-	gin.SetMode(gin.ReleaseMode)
-	router := gin.Default()
+	// Using gin.New() for complete control over execution and telemetry middleware stack
+	router := gin.New()
 
 	router.Use(CORSMiddleware())
 	router.Use(gin.Recovery())
-	router.Use(gin.Logger())
+
+	// ⚡ 5. DAY 43: Attach Zap Structured Logger & Correlation Trace ID Propagation Middleware
+	router.Use(logger.ZapLoggerMiddleware())
+
+	// ⚡ 6. DAY 42: Attach Prometheus Metrics Collection Middleware
+	router.Use(middleware.PrometheusMiddleware("user-service"))
+
+	// ⚡ 7. DAY 42: Expose standard Prometheus metrics scraper endpoint
+	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	router.GET("/health", func(c *gin.Context) {
+		traceID, _ := c.Get("trace_id")
 		c.JSON(http.StatusOK, gin.H{
 			"status":    "UP",
 			"timestamp": time.Now().Format(time.RFC3339),
 			"service":   "user-service",
+			"trace_id":  traceID,
 		})
 	})
 
 	routes.SetupRoutes(router, userHandler, friendHandler, blockHandler, jwtSecret)
 
 	serverAddr := fmt.Sprintf(":%s", port)
-	log.Printf("User Service online and listening on port %s 🚀", port)
+	log.Printf("🚀 User Service online and listening on port %s (Observability Enabled)", port)
 	if err := router.Run(serverAddr); err != nil {
 		log.Fatalf("Fatal: Server initialization crashed on %s: %v", serverAddr, err)
 	}

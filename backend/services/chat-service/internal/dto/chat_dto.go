@@ -1,6 +1,9 @@
 package dto
 
-import "time"
+import (
+	"chat-service/internal/utils"
+	"time"
+)
 
 type MessageResponse struct {
 	ID        string    `json:"id"`
@@ -18,4 +21,10 @@ type SendMessageRequest struct {
 type CreateGroupRequest struct {
 	Name      string   `json:"name" binding:"required,min=2"`
 	MemberIDs []string `json:"member_ids" binding:"required"`
+}
+
+type RoomDetailsResponse struct {
+	RoomID      string                     `json:"room_id"`
+	Participant *utils.UserProfileFallback `json:"participant"`
+	Degraded    bool                       `json:"degraded"`
 }

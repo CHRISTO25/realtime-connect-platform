@@ -10,6 +10,7 @@ export const AuthProvider = ({ children }) => {
 
   const [token, setToken] = useState(localStorage.getItem('access_token') || null);
   const [userId, setUserId] = useState(localStorage.getItem('user_id') || null);
+  const [userRole, setUserRole] = useState(localStorage.getItem('user_role') || 'user');
   const [refreshToken, setRefreshToken] = useState(localStorage.getItem('refresh_token') || null);
 
   useEffect(() => {
@@ -29,6 +30,14 @@ export const AuthProvider = ({ children }) => {
   }, [userId]);
 
   useEffect(() => {
+    if (userRole) {
+      localStorage.setItem('user_role', userRole);
+    } else {
+      localStorage.removeItem('user_role');
+    }
+  }, [userRole]);
+
+  useEffect(() => {
     if (refreshToken) {
       localStorage.setItem('refresh_token', refreshToken);
     } else {
@@ -36,11 +45,12 @@ export const AuthProvider = ({ children }) => {
     }
   }, [refreshToken]);
 
-  const decodeJwtUserId = (tokenString) => {
+  // ⚡ Robust JWT Decoder extracting both ID and Role claims
+  const decodeJwtPayload = (tokenString) => {
     try {
-      if (!tokenString) return null;
+      if (!tokenString) return { userId: null, role: 'user' };
       const base64Url = tokenString.split('.')[1];
-      if (!base64Url) return null;
+      if (!base64Url) return { userId: null, role: 'user' };
 
       let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
       while (base64.length % 4) {
@@ -55,10 +65,13 @@ export const AuthProvider = ({ children }) => {
       );
 
       const parsed = JSON.parse(jsonPayload);
-      return parsed.user_id || parsed.id || null;
+      return {
+        userId: parsed.user_id || parsed.id || null,
+        role: parsed.role || 'user', // 👈 Extracts role from backend JWT token
+      };
     } catch (e) {
       console.error('JWT Parsing Error:', e);
-      return null;
+      return { userId: null, role: 'user' };
     }
   };
 
@@ -83,41 +96,42 @@ export const AuthProvider = ({ children }) => {
         throw new Error('Access token absent from response body.');
       }
 
-      const extractedUserId = decodeJwtUserId(extractedAccessToken);
+      // ⚡ Decode claims securely from the token
+      const { userId: extractedUserId, role: extractedRole } = decodeJwtPayload(extractedAccessToken);
 
       setToken(extractedAccessToken);
       setUserId(extractedUserId);
+      setUserRole(extractedRole);
       setRefreshToken(extractedRefreshToken || null);
 
       dispatch(
         setUserProfile({
           id: extractedUserId,
+          role: extractedRole,
           displayName: result?.data?.user?.display_name || localStorage.getItem('display_name') || 'User',
           avatarUrl: result?.data?.user?.avatar_url || localStorage.getItem('avatar_url') || '',
         })
       );
 
-      // ⚡ Send immediate heartbeat on login to mark IS_ONLINE = TRUE
       try {
         await userApi.post('/heartbeat');
       } catch (err) {}
 
-      return { success: true };
+      return { success: true, role: extractedRole }; // 👈 Returns role so login navigation handles it smoothly
     } catch (error) {
       return { success: false, error: error.message };
     }
   };
 
-  // ⚡ FIXED LOGOUT: Sends POST /logout BEFORE clearing localStorage!
   const logout = async () => {
     try {
-      // Must be called WHILE access_token is still stored!
       await userApi.post('/logout');
     } catch (err) {
       console.warn('Logout API notification skipped:', err);
     } finally {
       setToken(null);
       setUserId(null);
+      setUserRole('user');
       setRefreshToken(null);
       localStorage.clear();
       dispatch(logoutUser());
@@ -125,7 +139,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ token, userId, refreshToken, login, logout, isAuthenticated: !!token }}>
+    <AuthContext.Provider value={{ token, userId, userRole, refreshToken, login, logout, isAuthenticated: !!token }}>
       {children}
     </AuthContext.Provider>
   );
