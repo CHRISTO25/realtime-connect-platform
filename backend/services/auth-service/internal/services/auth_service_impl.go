@@ -10,6 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
+	"golang.org/x/crypto/bcrypt"
 	"log"
 	"math/big"
 	"net/http"
@@ -18,10 +21,6 @@ import (
 	"shared/jwt"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
-	"golang.org/x/crypto/bcrypt"
 )
 
 var ErrEmailAlreadyExists = errors.New("email already registered")
@@ -50,7 +49,7 @@ type StagedUser struct {
 	HashedPassword string `json:"hashed_password"`
 }
 
-// 1️⃣ Step 1: Register stages the user data in Redis and triggers Gmail SMTP OTP (No Database Write Yet)
+// 1️⃣ Step 1: Register stages user data in Redis and triggers Gmail SMTP OTP (No Database Write Yet)
 func (s *AuthServiceImpl) Register(ctx context.Context, req dto.RegisterRequest) error {
 	existingUser, err := s.userRepo.FindByEmail(ctx, req.Email)
 	if err != nil {
@@ -231,6 +230,7 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req dto.LoginRequest) (*dto
 		return nil, ErrInvalidCredentials
 	}
 
+	// ⚡ BLOCK LOGIN IF USER IS BANNED
 	if user.IsBanned {
 		return nil, ErrUserBanned
 	}
@@ -276,6 +276,8 @@ func (s *AuthServiceImpl) GetProfile(ctx context.Context, userID string) (*dto.U
 		ID:       user.ID,
 		Username: user.Username,
 		Email:    user.Email,
+		Role:     user.Role,
+		IsBanned: user.IsBanned,
 	}, nil
 }
 

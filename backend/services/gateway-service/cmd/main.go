@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -266,7 +267,7 @@ func main() {
 	})
 
 	// ==========================================
-	// 2. CENTRALIZED JWT GUARD (PROTECTED ROUTES)
+	// 2. CENTRALIZED JWT GUARD & LIVE BAN ENFORCEMENT
 	// ==========================================
 	authGroup := r.Group("/")
 	authGroup.Use(func(c *gin.Context) {
@@ -283,6 +284,30 @@ func main() {
 			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "Invalid or expired authorization token"})
 			c.Abort()
 			return
+		}
+
+		// ⚡ INSTANT GATEWAY BAN ENFORCEMENT CHECK:
+		httpClient := http.Client{Timeout: 1000 * time.Millisecond}
+		statusReq, _ := http.NewRequestWithContext(c.Request.Context(), "GET", userURL+"/api/v1/users/internal/status?user_id="+claims.UserID, nil)
+		statusResp, statusErr := httpClient.Do(statusReq)
+
+		if statusErr == nil && statusResp != nil {
+			defer statusResp.Body.Close()
+			if statusResp.StatusCode == http.StatusOK {
+				var statusData struct {
+					Success bool `json:"success"`
+					Data    struct {
+						IsBanned bool `json:"is_banned"`
+					} `json:"data"`
+				}
+				if json.NewDecoder(statusResp.Body).Decode(&statusData) == nil {
+					if statusData.Data.IsBanned {
+						c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Your account has been suspended by an administrator."})
+						c.Abort()
+						return
+					}
+				}
+			}
 		}
 
 		// Inject verified metadata headers downstream
@@ -305,7 +330,7 @@ func main() {
 	})
 
 	authGroup.Any("/api/v1/admin/*path", func(c *gin.Context) {
-		userProxy.ServeHTTP(c.Writer, c.Request)
+		authProxy.ServeHTTP(c.Writer, c.Request)
 	})
 
 	// Shorthand Fallback Mappings to user-service
@@ -317,6 +342,7 @@ func main() {
 	authGroup.Any("/profile/*path", userForwarder)
 	authGroup.Any("/profile", userForwarder)
 	authGroup.Any("/heartbeat", userForwarder)
+	authGroup.Any("/logout", userForwarder) // ◄ Added to fix 404 logout errors
 
 	// ⚡ Health-Aware Balanced Chat REST routes
 	authGroup.Any("/api/v1/chat/*path", func(c *gin.Context) {
@@ -325,7 +351,7 @@ func main() {
 	})
 
 	// ==========================================
-	// 3. WEBSOCKET TUNNEL (FAILOVER BALANCED)
+	// 3. WEBSOCKET TUNNEL (FAILOVER BALANCED) WITH LIVE BAN ENFORCEMENT
 	// ==========================================
 	r.GET("/ws", func(c *gin.Context) {
 		tokenStr := c.Query("token")
@@ -345,6 +371,29 @@ func main() {
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "error": "Invalid token for WebSocket handshake"})
 			return
+		}
+
+		// ⚡ INSTANT WEBSOCKET HANDSHAKE BAN CHECK:
+		httpClient := http.Client{Timeout: 1000 * time.Millisecond}
+		statusReq, _ := http.NewRequestWithContext(c.Request.Context(), "GET", userURL+"/api/v1/users/internal/status?user_id="+claims.UserID, nil)
+		statusResp, statusErr := httpClient.Do(statusReq)
+
+		if statusErr == nil && statusResp != nil {
+			defer statusResp.Body.Close()
+			if statusResp.StatusCode == http.StatusOK {
+				var statusData struct {
+					Success bool `json:"success"`
+					Data    struct {
+						IsBanned bool `json:"is_banned"`
+					} `json:"data"`
+				}
+				if json.NewDecoder(statusResp.Body).Decode(&statusData) == nil {
+					if statusData.Data.IsBanned {
+						c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Your account has been suspended by an administrator."})
+						return
+					}
+				}
+			}
 		}
 
 		c.Request.Header.Set("X-User-ID", claims.UserID)

@@ -24,6 +24,7 @@ func (r *ProfileRepositoryImpl) CreateProfile(ctx context.Context, profile *mode
 		Where(model.UserProfile{UserID: profile.UserID}).
 		Attrs(model.UserProfile{
 			DisplayName: profile.DisplayName,
+			Email:       profile.Email,
 		}).
 		FirstOrCreate(profile).Error
 }
@@ -32,7 +33,7 @@ func (r *ProfileRepositoryImpl) CreateProfile(ctx context.Context, profile *mode
 func (r *ProfileRepositoryImpl) FindByUserID(ctx context.Context, userIDStr string) (*model.UserProfile, error) {
 	var profile model.UserProfile
 	err := r.db.WithContext(ctx).
-		Select("id, user_id, display_name, bio, location, avatar_url, cover_url, is_online, last_seen, created_at, updated_at").
+		Select("id, user_id, email, role, is_verified, is_banned, display_name, bio, location, avatar_url, cover_url, is_online, last_seen, created_at, updated_at").
 		Where("user_id = ?", userIDStr).
 		First(&profile).Error
 
@@ -50,6 +51,7 @@ func (r *ProfileRepositoryImpl) FindByUserID(ctx context.Context, userIDStr stri
 				ID:          userIDStr,
 				UserID:      userIDStr,
 				DisplayName: displayName,
+				IsBanned:    false,
 			}
 			if createErr := r.db.WithContext(ctx).Create(&newProfile).Error; createErr != nil {
 				return nil, errors.New("self-healing failed to create profile: " + createErr.Error())
@@ -100,7 +102,7 @@ func (r *ProfileRepositoryImpl) GetAllProfilesPaginated(ctx context.Context, exc
 
 	// 2. Paginated Fetch with Projection (Avoids SELECT *)
 	err := query.
-		Select("id, user_id, display_name, bio, location, avatar_url, cover_url, is_online, last_seen, created_at").
+		Select("id, user_id, email, role, is_verified, is_banned, display_name, bio, location, avatar_url, cover_url, is_online, last_seen, created_at").
 		Offset(offset).
 		Limit(limit).
 		Order("created_at DESC").
@@ -151,7 +153,7 @@ func (r *ProfileRepositoryImpl) SearchProfiles(ctx context.Context, currentUserI
 
 	// 4. Execute Paginated Fetch with Column Projection for maximum throughput
 	err := dbQuery.
-		Select("id, user_id, display_name, bio, location, avatar_url, cover_url, is_online, last_seen, created_at").
+		Select("id, user_id, email, role, is_verified, is_banned, display_name, bio, location, avatar_url, cover_url, is_online, last_seen, created_at").
 		Offset(offset).
 		Limit(limit).
 		Order("created_at DESC").
@@ -173,18 +175,19 @@ func (r *ProfileRepositoryImpl) UpdateStatus(ctx context.Context, userIDStr stri
 			"last_seen": time.Now(),
 		}).Error
 }
+
 func (r *ProfileRepositoryImpl) AdminGetAllUsers(ctx context.Context, query string) ([]model.UserProfile, error) {
 	var profiles []model.UserProfile
-	dbQuery := r.db.WithContext(ctx)
+	dbQuery := r.db.WithContext(ctx).Model(&model.UserProfile{})
 
 	if query != "" {
-		dbQuery = dbQuery.Where("display_name ILIKE ? OR email ILIKE ?", "%"+query+"%", "%"+query+"%")
+		likePattern := "%" + query + "%"
+		dbQuery = dbQuery.Where("user_id = ? OR display_name ILIKE ? OR email ILIKE ?", query, likePattern, likePattern)
 	}
 
-	err := dbQuery.Find(&profiles).Error
+	err := dbQuery.Order("created_at DESC").Find(&profiles).Error
 	return profiles, err
 }
-
 func (r *ProfileRepositoryImpl) AdminSetUserBanStatus(ctx context.Context, userID string, isBanned bool) error {
 	return r.db.WithContext(ctx).
 		Model(&model.UserProfile{}).

@@ -1,5 +1,7 @@
 package dto
 
+import "time"
+
 type UpdateProfileRequest struct {
 	DisplayName string `json:"display_name"`
 	Bio         string `json:"bio"`
@@ -9,14 +11,20 @@ type UpdateProfileRequest struct {
 }
 
 type UserProfileResponse struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name"`
-	Bio         string `json:"bio"`
-	Location    string `json:"location"`
-	AvatarURL   string `json:"avatar_url"`
-	CoverURL    string `json:"cover_url"`
-	IsOnline    bool   `json:"is_online"`
-	LastSeen    string `json:"last_seen"`
+	ID          string    `json:"id"`
+	UserID      string    `json:"user_id"`
+	Username    string    `json:"username"`
+	Email       string    `json:"email"`
+	Role        string    `json:"role"`      // ◄ Ensure this exists
+	IsBanned    bool      `json:"is_banned"` // ◄ Ensure this exists
+	IsVerified  bool      `json:"is_verified"`
+	DisplayName string    `json:"display_name"`
+	Bio         string    `json:"bio"`
+	Location    string    `json:"location"`
+	AvatarURL   string    `json:"avatar_url"`
+	CoverURL    string    `json:"cover_url"`
+	IsOnline    bool      `json:"is_online"`
+	LastSeen    time.Time `json:"last_seen"`
 }
 
 type UserListItemResponse struct {

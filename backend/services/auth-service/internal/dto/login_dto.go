@@ -11,7 +11,7 @@ type LoginResponse struct {
 }
 
 type RefreshRequest struct {
-	RefreshToken string `json:"refresh_token" bindng:"required"`
+	RefreshToken string `json:"refresh_token" binding:"required"` // ◄ Fixed: corrected from "bindng" to "binding"
 }
 
 type TokenResponse struct {

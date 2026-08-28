@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { userApi } from '../services/api/client';
-import { ShieldCheck, UserX, UserCheck, Search, RefreshCw, AlertTriangle, Terminal, Activity } from 'lucide-react';
+import { ShieldCheck, UserX, UserCheck, Search, RefreshCw, AlertTriangle, Terminal, Activity, Lock } from 'lucide-react';
 
 export default function AdminDashboard() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(null); // Tracks ID of user being updated
+  const [actionLoading, setActionLoading] = useState(null);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [stats, setStats] = useState({ total: 0, active: 0, banned: 0 });
@@ -16,13 +16,11 @@ export default function AdminDashboard() {
       setError('');
       const response = await userApi.get(`/api/v1/admin/users?query=${encodeURIComponent(query)}`);
       
-      // ⚡ ROBUST PARSING: Handles standard arrays or nested { success, data: [...] } responses safely
       const responseData = response.data?.data || response.data || [];
       const userList = Array.isArray(responseData) ? responseData : (responseData.users || []);
 
       setUsers(userList);
 
-      // Compute quick operational stats
       const total = userList.length;
       const banned = userList.filter(u => u.is_banned).length;
       setStats({
@@ -46,14 +44,38 @@ export default function AdminDashboard() {
   const handleBanToggle = async (userId, currentBanStatus) => {
     try {
       setActionLoading(userId);
+      const newBanStatus = !currentBanStatus;
+
+      // ⚡ OPTIMISTIC UPDATE: Instantly update UI state so there is zero delay
+      setUsers(prevUsers =>
+        prevUsers.map(u => {
+          const uId = u.id || u.user_id;
+          if (uId === userId) {
+            return { ...u, is_banned: newBanStatus };
+          }
+          return u;
+        })
+      );
+
+      // Update stats instantly
+      setStats(prev => ({
+        ...prev,
+        active: newBanStatus ? prev.active - 1 : prev.active + 1,
+        banned: newBanStatus ? prev.banned + 1 : prev.banned - 1
+      }));
+
+      // Fire backend request
       await userApi.patch(`/api/v1/admin/users/${userId}/ban`, {
-        is_banned: !currentBanStatus,
+        is_banned: newBanStatus,
         ban_expires_at: null,
       });
-      // Refresh current search context
-      await fetchUsers(search);
+
+      // Background silent sync to ensure consistency
+      fetchUsers(search);
     } catch (err) {
       alert(err.response?.data?.error || 'Authorization command failed: Could not alter account status.');
+      // Revert state if backend fails by refetching
+      fetchUsers(search);
     } finally {
       setActionLoading(null);
     }
@@ -63,7 +85,7 @@ export default function AdminDashboard() {
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-10 font-sans selection:bg-indigo-500 selection:text-white">
       <div className="max-w-7xl mx-auto space-y-8">
         
-        {/* Top Header Engineering Dashboard Header */}
+        {/* Top Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800/80 pb-6">
           <div>
             <div className="flex items-center space-x-3">
@@ -89,7 +111,7 @@ export default function AdminDashboard() {
           </button>
         </div>
 
-        {/* Real-time Metric Cards Grid */}
+        {/* Metric Cards Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-5 backdrop-blur-xl shadow-xl">
             <div className="flex items-center justify-between opacity-60 text-xs font-mono uppercase">
@@ -116,7 +138,7 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {/* Search Bar Workspace */}
+        {/* Search Bar */}
         <div className="flex flex-col sm:flex-row gap-3 items-center justify-between bg-slate-900/40 p-4 border border-slate-800/80 rounded-2xl backdrop-blur-md">
           <div className="relative w-full sm:w-96">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -137,7 +159,6 @@ export default function AdminDashboard() {
           </button>
         </div>
 
-        {/* Global Error Banner */}
         {error && (
           <div className="p-4 bg-rose-500/10 border border-rose-500/30 text-rose-400 rounded-xl flex items-center space-x-3 text-xs font-semibold">
             <AlertTriangle className="w-5 h-5 shrink-0" />
@@ -145,7 +166,7 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {/* Ultra-Clean Directory Table */}
+        {/* Directory Table */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
@@ -160,7 +181,7 @@ export default function AdminDashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-sm">
-                {loading ? (
+                {loading && users.length === 0 ? (
                   <tr>
                     <td colSpan="6" className="p-12 text-center text-slate-500 font-mono text-xs uppercase tracking-wider">
                       <div className="inline-flex items-center space-x-2">
@@ -176,77 +197,88 @@ export default function AdminDashboard() {
                     </td>
                   </tr>
                 ) : (
-                  users.map((u) => (
-                    <tr key={u.id || u.user_id} className="hover:bg-slate-850/40 transition-colors group">
-                      <td className="p-4 font-semibold text-white flex items-center space-x-2.5">
-                        <div className="w-7 h-7 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center font-mono text-xs text-indigo-400">
-                          {u.username?.charAt(0).toUpperCase() || 'U'}
-                        </div>
-                        <span>{u.username || u.display_name}</span>
-                      </td>
-                      <td className="p-4 text-slate-300 font-mono text-xs opacity-80">{u.email}</td>
-                      <td className="p-4">
-                        <span className={`px-2.5 py-1 rounded-md text-[10px] font-mono font-bold uppercase tracking-wider ${
-                          u.role === 'admin' 
-                            ? 'bg-purple-500/10 border border-purple-500/20 text-purple-400 shadow-sm' 
-                            : 'bg-slate-800 text-slate-300'
-                        }`}>
-                          {u.role || 'user'}
-                        </span>
-                      </td>
-                      <td className="p-4">
-                        {u.is_verified ? (
-                          <span className="inline-flex items-center space-x-1.5 text-xs text-emerald-400 font-medium">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                            <span>Verified</span>
+                  users.map((u) => {
+                    const isAdmin = u.role === 'admin';
+                    const targetId = u.id || u.user_id;
+                    return (
+                      <tr key={targetId} className="hover:bg-slate-850/40 transition-colors group">
+                        <td className="p-4 font-semibold text-white flex items-center space-x-2.5">
+                          <div className="w-7 h-7 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center font-mono text-xs text-indigo-400">
+                            {u.username?.charAt(0).toUpperCase() || 'U'}
+                          </div>
+                          <span>{u.username || u.display_name}</span>
+                        </td>
+                        <td className="p-4 text-slate-300 font-mono text-xs opacity-80">{u.email}</td>
+                        <td className="p-4">
+                          <span className={`px-2.5 py-1 rounded-md text-[10px] font-mono font-bold uppercase tracking-wider ${
+                            isAdmin 
+                              ? 'bg-purple-500/10 border border-purple-500/20 text-purple-400 shadow-sm' 
+                              : 'bg-slate-800 text-slate-300'
+                          }`}>
+                            {u.role || 'user'}
                           </span>
-                        ) : (
-                          <span className="inline-flex items-center space-x-1.5 text-xs text-amber-400 font-medium">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                            <span>Pending</span>
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-4">
-                        {u.is_banned ? (
-                          <span className="inline-flex items-center space-x-1.5 text-xs text-rose-400 font-medium">
-                            <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse"></span>
-                            <span>Suspended</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center space-x-1.5 text-xs text-emerald-400 font-medium">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                            <span>Active Node</span>
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-4 text-right">
-                        <button 
-                          onClick={() => handleBanToggle(u.id || u.user_id, u.is_banned)}
-                          disabled={actionLoading === (u.id || u.user_id)}
-                          className={`px-3.5 py-1.5 rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition inline-flex items-center space-x-1.5 cursor-pointer disabled:opacity-40 ${
-                            u.is_banned 
-                              ? 'bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 border border-emerald-500/30' 
-                              : 'bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 border border-rose-500/30'
-                          }`}
-                        >
-                          {actionLoading === (u.id || u.user_id) ? (
-                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                          ) : u.is_banned ? (
-                            <>
-                              <UserCheck className="w-3.5 h-3.5" />
-                              <span>Restore</span>
-                            </>
+                        </td>
+                        <td className="p-4">
+                          {u.is_verified ? (
+                            <span className="inline-flex items-center space-x-1.5 text-xs text-emerald-400 font-medium">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                              <span>Verified</span>
+                            </span>
                           ) : (
-                            <>
-                              <UserX className="w-3.5 h-3.5" />
-                              <span>Suspend</span>
-                            </>
+                            <span className="inline-flex items-center space-x-1.5 text-xs text-amber-400 font-medium">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                              <span>Pending</span>
+                            </span>
                           )}
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                        </td>
+                        <td className="p-4">
+                          {u.is_banned ? (
+                            <span className="inline-flex items-center space-x-1.5 text-xs text-rose-400 font-medium">
+                              <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse"></span>
+                              <span>Suspended</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center space-x-1.5 text-xs text-emerald-400 font-medium">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                              <span>Active Node</span>
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-4 text-right">
+                          {isAdmin ? (
+                            <span className="inline-flex items-center space-x-1.5 px-3 py-1 bg-purple-500/5 border border-purple-500/20 rounded-xl text-[11px] font-mono text-purple-400 opacity-75">
+                              <Lock className="w-3 h-3" />
+                              <span>Protected Node</span>
+                            </span>
+                          ) : (
+                            <button 
+                              onClick={() => handleBanToggle(targetId, u.is_banned)}
+                              disabled={actionLoading === targetId}
+                              className={`px-3.5 py-1.5 rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition inline-flex items-center space-x-1.5 cursor-pointer disabled:opacity-40 ${
+                                u.is_banned 
+                                  ? 'bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 border border-emerald-500/30' 
+                                  : 'bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 border border-rose-500/30'
+                              }`}
+                            >
+                              {actionLoading === targetId ? (
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              ) : u.is_banned ? (
+                                <>
+                                  <UserCheck className="w-3.5 h-3.5" />
+                                  <span>Restore</span>
+                                </>
+                              ) : (
+                                <>
+                                  <UserX className="w-3.5 h-3.5" />
+                                  <span>Suspend</span>
+                                </>
+                              )}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>

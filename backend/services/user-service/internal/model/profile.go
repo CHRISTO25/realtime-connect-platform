@@ -20,3 +20,7 @@ type UserProfile struct {
 	CreatedAt   time.Time `gorm:"index:idx_created_at" json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
+
+func (UserProfile) TableName() string {
+	return "user_profiles"
+}

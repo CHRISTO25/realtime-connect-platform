@@ -12,6 +12,8 @@ func SetupRoutes(router *gin.Engine, h *handler.UserHandler, friendH *handler.Fr
 	v1 := router.Group("/api/v1/users")
 	{
 		v1.POST("/internal/init", h.InitProfile)
+		v1.GET("/internal/status", h.GetInternalUserStatus)
+		v1.PATCH("/internal/admin/ban/:id", h.AdminInternalToggleBan) // ◄ CRITICAL FIX: Added internal sync route for bans from auth-service
 		v1.GET("/profile/:id", h.GetProfile)
 		v1.POST("/presence/offline/beacon", h.MarkOffline)
 
@@ -46,6 +48,7 @@ func SetupRoutes(router *gin.Engine, h *handler.UserHandler, friendH *handler.Fr
 	directProtected.Use(middleware.AuthMiddleware(jwtSecret))
 	{
 		directProtected.POST("/heartbeat", h.Heartbeat)
+		directProtected.POST("/logout", h.Logout) // ◄ Added shorthand fallback for logout
 		directProtected.GET("/search", h.SearchUsers)
 		directProtected.GET("/allProfile", h.GetallUsers)
 		directProtected.GET("/friends/list", friendH.GetFriendsList)
@@ -54,7 +57,7 @@ func SetupRoutes(router *gin.Engine, h *handler.UserHandler, friendH *handler.Fr
 		directProtected.PUT("/profile", h.UpdateProfile)
 	}
 
-	// 3. ⚡ Admin Control Group matching exactly what the gateway proxies: /api/v1/admin
+	// 3. Admin Control Group matching exactly what the gateway proxies: /api/v1/admin
 	adminGroup := router.Group("/api/v1/admin")
 	adminGroup.Use(middleware.AuthMiddleware(jwtSecret))
 	{

@@ -83,13 +83,32 @@ authApi.interceptors.response.use(
   }
 );
 
-// 5. Response Interceptor for userApi: Thread-Safe 401 Auto-Refresh & Error Event Dispatching
+// 5. Response Interceptor for userApi: Thread-Safe 401 Auto-Refresh, 403 Ban Enforcement, & Error Event Dispatching
 userApi.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
 
-    // Handle 401 Unauthorized (Refresh Token Flow with Concurrency Lock)
+    // ⚡ 1. CATCH ACCOUNT SUSPENSION / BAN (403 Forbidden)
+    if (error.response && error.response.status === 403) {
+      const errorData = error.response.data;
+      const errorMsg = JSON.stringify(errorData || '').toLowerCase();
+      
+      if (errorMsg.includes('suspended') || errorMsg.includes('banned') || errorMsg.includes('administrator')) {
+        alert('🚨 Your account has been suspended by an administrator.');
+        localStorage.clear();
+        window.dispatchEvent(
+          new CustomEvent('session_expired', { detail: { message: 'Account suspended. Session terminated.' } })
+        );
+        
+        if (!window.location.pathname.includes('/login')) {
+          window.location.href = '/login';
+        }
+        return Promise.reject(error);
+      }
+    }
+
+    // 2. Handle 401 Unauthorized (Refresh Token Flow with Concurrency Lock)
     if (error.response?.status === 401 && !originalRequest._retry) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {

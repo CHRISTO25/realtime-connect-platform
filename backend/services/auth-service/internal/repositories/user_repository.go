@@ -75,3 +75,14 @@ func (r *UserRepositoryImpl) RevokeUserTokens(ctx context.Context, userID string
 func (r *UserRepositoryImpl) UpdateRefreshToken(ctx context.Context, token *model.RefreshToken) error {
 	return r.db.WithContext(ctx).Save(token).Error
 }
+
+// ⚡ LIVE BAN CHECK: Queries PostgreSQL to verify if the operator node is suspended
+// IsUserBanned queries the database to check if a user is currently suspended
+func (r *UserRepositoryImpl) IsUserBanned(ctx context.Context, userID string) (bool, error) {
+	var user model.User
+	err := r.db.WithContext(ctx).Select("is_banned").Where("id = ?", userID).First(&user).Error
+	if err != nil {
+		return false, err
+	}
+	return user.IsBanned, nil
+}

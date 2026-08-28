@@ -56,7 +56,7 @@ func (s *UserServiceImpl) GetProfile(ctx context.Context, userID string) (*dto.U
 		AvatarURL:   profile.AvatarURL,
 		CoverURL:    profile.CoverURL,
 		IsOnline:    isUserActive(profile.IsOnline, profile.LastSeen),
-		LastSeen:    profile.LastSeen.Format(time.RFC3339),
+		LastSeen:    profile.LastSeen, // ◄ FIXED: Passed original time.Time directly to match DTO struct definition
 	}, nil
 }
 
@@ -94,7 +94,7 @@ func (s *UserServiceImpl) UpdateProfile(ctx context.Context, userID string, req 
 		AvatarURL:   profile.AvatarURL,
 		CoverURL:    profile.CoverURL,
 		IsOnline:    isUserActive(profile.IsOnline, profile.LastSeen),
-		LastSeen:    profile.LastSeen.Format(time.RFC3339),
+		LastSeen:    profile.LastSeen, // ◄ FIXED: Passed original time.Time directly to match DTO struct definition
 	}, nil
 }
 

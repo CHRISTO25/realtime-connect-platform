@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 	"user-service/internal/dto"
 	"user-service/internal/service"
 
@@ -18,7 +19,6 @@ func NewUserHandler(userService service.UserService) *UserHandler {
 	return &UserHandler{userService: userService}
 }
 
-// ⚡ Added Email field here to match the incoming payload
 type InitProfileRequest struct {
 	UserID      string `json:"user_id" binding:"required"`
 	DisplayName string `json:"display_name" binding:"required"`
@@ -37,7 +37,6 @@ func (h *UserHandler) InitProfile(c *gin.Context) {
 		return
 	}
 
-	// ⚡ Passing req.UserID, req.DisplayName, and req.Email cleanly
 	if err := h.userService.InitProfile(c.Request.Context(), req.UserID, req.DisplayName, req.Email); err != nil {
 		log.Printf("[InitProfile DB ERROR]: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -50,6 +49,35 @@ func (h *UserHandler) InitProfile(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
 		"message": "Profile initialized successfully",
+	})
+}
+
+// 1.5. Internal User Status Bridge for API Gateway Live Ban Checks
+func (h *UserHandler) GetInternalUserStatus(c *gin.Context) {
+	userID := c.Query("user_id")
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Missing user_id query parameter",
+		})
+		return
+	}
+
+	profile, err := h.userService.GetProfile(c.Request.Context(), userID)
+	if err != nil || profile == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "Operator record not found",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"is_banned": profile.IsBanned,
+			"role":      profile.Role,
+		},
 	})
 }
 
@@ -81,12 +109,17 @@ func (h *UserHandler) GetProfile(c *gin.Context) {
 
 // 3. PUT /api/v1/users/profile
 func (h *UserHandler) UpdateProfile(c *gin.Context) {
-	userID, exists := c.Get("userID")
+	val, exists := c.Get("userID")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"success": false,
 			"message": "Unauthorized request: missing user claims",
 		})
+		return
+	}
+	userID, ok := val.(string)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Invalid user context type"})
 		return
 	}
 
@@ -99,7 +132,7 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 		return
 	}
 
-	res, err := h.userService.UpdateProfile(c.Request.Context(), userID.(string), req)
+	res, err := h.userService.UpdateProfile(c.Request.Context(), userID, req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -116,8 +149,12 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 
 // 4. GET /api/v1/users/allProfile
 func (h *UserHandler) GetallUsers(c *gin.Context) {
-	userID, _ := c.Get("userID")
-	currentUserID, _ := userID.(string)
+	var currentUserID string
+	if val, exists := c.Get("userID"); exists {
+		if idStr, ok := val.(string); ok {
+			currentUserID = idStr
+		}
+	}
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	perPage, _ := strconv.Atoi(c.DefaultQuery("per_page", "10"))
@@ -138,11 +175,12 @@ func (h *UserHandler) GetallUsers(c *gin.Context) {
 }
 
 func (h *UserHandler) UploadAvatar(c *gin.Context) {
-	userID, exists := c.Get("userID")
+	val, exists := c.Get("userID")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Unauthorized"})
 		return
 	}
+	userID := val.(string)
 
 	file, err := c.FormFile("avatar")
 	if err != nil {
@@ -150,7 +188,7 @@ func (h *UserHandler) UploadAvatar(c *gin.Context) {
 		return
 	}
 
-	res, err := h.userService.UploadAvatar(c.Request.Context(), userID.(string), file)
+	res, err := h.userService.UploadAvatar(c.Request.Context(), userID, file)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to upload avatar: " + err.Error()})
 		return
@@ -160,11 +198,12 @@ func (h *UserHandler) UploadAvatar(c *gin.Context) {
 }
 
 func (h *UserHandler) UploadCover(c *gin.Context) {
-	userID, exists := c.Get("userID")
+	val, exists := c.Get("userID")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Unauthorized"})
 		return
 	}
+	userID := val.(string)
 
 	file, err := c.FormFile("cover")
 	if err != nil {
@@ -172,7 +211,7 @@ func (h *UserHandler) UploadCover(c *gin.Context) {
 		return
 	}
 
-	res, err := h.userService.UploadCover(c.Request.Context(), userID.(string), file)
+	res, err := h.userService.UploadCover(c.Request.Context(), userID, file)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to upload cover: " + err.Error()})
 		return
@@ -183,11 +222,12 @@ func (h *UserHandler) UploadCover(c *gin.Context) {
 
 // GET /api/v1/users/search
 func (h *UserHandler) SearchUsers(c *gin.Context) {
-	userID, exists := c.Get("userID")
+	val, exists := c.Get("userID")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Unauthorized request"})
 		return
 	}
+	userID := val.(string)
 
 	var req dto.SearchUsersRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
@@ -195,7 +235,7 @@ func (h *UserHandler) SearchUsers(c *gin.Context) {
 		return
 	}
 
-	res, err := h.userService.SearchUsers(c.Request.Context(), userID.(string), &req)
+	res, err := h.userService.SearchUsers(c.Request.Context(), userID, &req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
 		return
@@ -206,13 +246,14 @@ func (h *UserHandler) SearchUsers(c *gin.Context) {
 
 // POST /api/v1/users/logout
 func (h *UserHandler) Logout(c *gin.Context) {
-	userID, exists := c.Get("userID")
+	val, exists := c.Get("userID")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Unauthorized"})
 		return
 	}
+	userID := val.(string)
 
-	if err := h.userService.UpdateStatus(c.Request.Context(), userID.(string), false); err != nil {
+	if err := h.userService.UpdateStatus(c.Request.Context(), userID, false); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
 		return
 	}
@@ -222,13 +263,14 @@ func (h *UserHandler) Logout(c *gin.Context) {
 
 // POST /api/v1/users/heartbeat
 func (h *UserHandler) Heartbeat(c *gin.Context) {
-	userID, exists := c.Get("userID")
+	val, exists := c.Get("userID")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Unauthorized"})
 		return
 	}
+	userID := val.(string)
 
-	if err := h.userService.UpdateStatus(c.Request.Context(), userID.(string), true); err != nil {
+	if err := h.userService.UpdateStatus(c.Request.Context(), userID, true); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
 		return
 	}
@@ -238,13 +280,18 @@ func (h *UserHandler) Heartbeat(c *gin.Context) {
 
 // POST /api/v1/users/presence/offline
 func (h *UserHandler) MarkOffline(c *gin.Context) {
-	userID, exists := c.Get("userID")
-	if !exists {
-		userID = c.Query("user_id")
+	var targetUserID string
+	if val, exists := c.Get("userID"); exists {
+		if idStr, ok := val.(string); ok {
+			targetUserID = idStr
+		}
+	}
+	if targetUserID == "" {
+		targetUserID = c.Query("user_id")
 	}
 
-	if userID != "" {
-		_ = h.userService.UpdateStatus(c.Request.Context(), userID.(string), false)
+	if targetUserID != "" {
+		_ = h.userService.UpdateStatus(c.Request.Context(), targetUserID, false)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true})
@@ -269,11 +316,12 @@ func (h *UserHandler) AdminGetUsers(c *gin.Context) {
 	})
 }
 
-// PATCH /api/v1/admin/users/:id/ban
 type BanRequest struct {
-	IsBanned bool `json:"is_banned"`
+	IsBanned     bool       `json:"is_banned"`
+	BanExpiresAt *time.Time `json:"ban_expires_at"` // Matched with auth-service structure
 }
 
+// PATCH /api/v1/admin/users/:id/ban
 func (h *UserHandler) AdminToggleBan(c *gin.Context) {
 	targetID := c.Param("id")
 	var req BanRequest
@@ -291,5 +339,28 @@ func (h *UserHandler) AdminToggleBan(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "User status modified successfully",
+	})
+}
+
+// INTERNAL BRIDGE: Syncs ban status changes from auth-service directly into user-service profile table
+func (h *UserHandler) AdminInternalToggleBan(c *gin.Context) {
+	targetID := c.Param("id")
+	var req struct {
+		IsBanned bool `json:"is_banned"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid payload format"})
+		return
+	}
+
+	err := h.userService.AdminSetUserBanStatus(c.Request.Context(), targetID, req.IsBanned)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "Failed to sync profile ban status"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Internal profile ban status synchronized successfully",
 	})
 }
