@@ -3,7 +3,7 @@ import axios from 'axios';
 // ⚡ Dynamic Environment Resolution (Vite / Production Fallback)
 const API_GATEWAY_URL = 
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_GATEWAY_URL) || 
-  'http://localhost:8080';
+  'https://realtime-connect-platform.onrender.com';
 
 // 1. Universal API instance for User, Friend, Profile, and Chat actions
 export const userApi = axios.create({
