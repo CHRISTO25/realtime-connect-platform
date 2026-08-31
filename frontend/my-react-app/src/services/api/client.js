@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-// ⚡ Dynamic Environment Resolution (Vite / Production Fallback)
-const API_GATEWAY_URL = 
+// ✅ Correct (clean string, no brackets, no markdown)
+const API_BASE_URL = 
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_GATEWAY_URL) || 
   'https://realtime-connect-platform.onrender.com';
 

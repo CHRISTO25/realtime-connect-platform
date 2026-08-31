@@ -5,6 +5,7 @@ import { userApi } from '../services/api/client';
 
 const AuthContext = createContext(null);
 
+// ✅ Correct (clean string, no brackets, no markdown)
 const API_BASE_URL = 
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_GATEWAY_URL) || 
   'https://realtime-connect-platform.onrender.com';
