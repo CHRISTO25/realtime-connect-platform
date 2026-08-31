@@ -5,7 +5,6 @@ import { userApi } from '../services/api/client';
 
 const AuthContext = createContext(null);
 
-// ✅ Correct (clean string, no brackets, no markdown)
 const API_BASE_URL = 
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_GATEWAY_URL) || 
   'https://chat-gateway-service.onrender.com';
@@ -13,11 +12,32 @@ const API_BASE_URL =
 export const AuthProvider = ({ children }) => {
   const dispatch = useDispatch();
 
-  const [token, setToken] = useState(localStorage.getItem('access_token') || null);
-  const [userId, setUserId] = useState(localStorage.getItem('user_id') || null);
-  const [userRole, setUserRole] = useState(localStorage.getItem('user_role') || 'user');
-  const [refreshToken, setRefreshToken] = useState(localStorage.getItem('refresh_token') || null);
+  const [token, setToken] = useState(() => localStorage.getItem('access_token') || null);
+  const [userId, setUserId] = useState(() => localStorage.getItem('user_id') || null);
+  const [userRole, setUserRole] = useState(() => localStorage.getItem('user_role') || 'user');
+  const [refreshToken, setRefreshToken] = useState(() => localStorage.getItem('refresh_token') || null);
+  const [isInitializing, setIsInitializing] = useState(true);
 
+  // Synchronize state from storage on first mount
+  useEffect(() => {
+    try {
+      const savedToken = localStorage.getItem('access_token');
+      const savedUserId = localStorage.getItem('user_id');
+      const savedRole = localStorage.getItem('user_role');
+      const savedRefresh = localStorage.getItem('refresh_token');
+
+      if (savedToken) setToken(savedToken);
+      if (savedUserId) setUserId(savedUserId);
+      if (savedRole) setUserRole(savedRole);
+      if (savedRefresh) setRefreshToken(savedRefresh);
+    } catch (e) {
+      console.error('Storage initialization error:', e);
+    } finally {
+      setIsInitializing(false);
+    }
+  }, []);
+
+  // Update storage whenever state changes
   useEffect(() => {
     if (token) {
       localStorage.setItem('access_token', token);
@@ -50,7 +70,7 @@ export const AuthProvider = ({ children }) => {
     }
   }, [refreshToken]);
 
-  // ⚡ Robust JWT Decoder extracting both ID and Role claims
+  // Decode JWT payload for user_id and role
   const decodeJwtPayload = (tokenString) => {
     try {
       if (!tokenString) return { userId: null, role: 'user' };
@@ -72,7 +92,7 @@ export const AuthProvider = ({ children }) => {
       const parsed = JSON.parse(jsonPayload);
       return {
         userId: parsed.user_id || parsed.id || null,
-        role: parsed.role || 'user', // 👈 Extracts role from backend JWT token
+        role: parsed.role || 'user',
       };
     } catch (e) {
       console.error('JWT Parsing Error:', e);
@@ -82,7 +102,6 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      //await fetch('http://localhost:8001/api/v1/auth/login'
       const response = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -102,8 +121,13 @@ export const AuthProvider = ({ children }) => {
         throw new Error('Access token absent from response body.');
       }
 
-      // ⚡ Decode claims securely from the token
       const { userId: extractedUserId, role: extractedRole } = decodeJwtPayload(extractedAccessToken);
+
+      // Write to storage immediately
+      localStorage.setItem('access_token', extractedAccessToken);
+      if (extractedUserId) localStorage.setItem('user_id', extractedUserId);
+      if (extractedRole) localStorage.setItem('user_role', extractedRole);
+      if (extractedRefreshToken) localStorage.setItem('refresh_token', extractedRefreshToken);
 
       setToken(extractedAccessToken);
       setUserId(extractedUserId);
@@ -123,7 +147,7 @@ export const AuthProvider = ({ children }) => {
         await userApi.post('/heartbeat');
       } catch (err) {}
 
-      return { success: true, role: extractedRole }; // 👈 Returns role so login navigation handles it smoothly
+      return { success: true, role: extractedRole };
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -145,7 +169,18 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ token, userId, userRole, refreshToken, login, logout, isAuthenticated: !!token }}>
+    <AuthContext.Provider
+      value={{
+        token,
+        userId,
+        userRole,
+        refreshToken,
+        login,
+        logout,
+        isAuthenticated: !!token,
+        isInitializing,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

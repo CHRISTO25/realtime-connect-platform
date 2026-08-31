@@ -3,19 +3,26 @@ import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 const ProtectedRoute = ({ children }) => {
-  const { token, userId } = useAuth();
-  
-  // Check auth state from context, fallback to localStorage synchronously
-  const activeToken = token || localStorage.getItem('access_token');
-  const activeUserId = userId || localStorage.getItem('user_id');
+  const { token, isInitializing } = useAuth();
 
-  // If no token exists, route to login
+  // 1. Wait for auth initialization before running checks
+  if (isInitializing) {
+    return (
+      <div className="min-h-screen w-full bg-slate-950 flex items-center justify-center text-slate-400 font-mono text-xs">
+        <span className="animate-pulse">Verifying session...</span>
+      </div>
+    );
+  }
+
+  // 2. Validate token from state or localStorage
+  const activeToken = token || localStorage.getItem('access_token');
+
   if (!activeToken) {
     console.warn("Guard Blocked: No active token detected. Redirecting to login.");
     return <Navigate to="/login" replace />;
   }
 
-  // Render children if passed, otherwise fall back to React Router Outlet
+  // 3. Render children if passed, otherwise fall back to React Router Outlet
   return children ? children : <Outlet />;
 };
 

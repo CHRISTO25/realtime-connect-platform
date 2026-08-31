@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { setUserProfile } from '../store/userSlice';
 import { userApi } from '../services/api/client';
@@ -6,7 +6,27 @@ import { userApi } from '../services/api/client';
 export default function Profile() {
   const dispatch = useDispatch();
   const reduxUser = useSelector((state) => state.user);
-  const currentLoggedInUserId = reduxUser?.id || localStorage.getItem('user_id');
+
+  // ⚡ Robust User ID resolution: Redux -> LocalStorage -> Decoded JWT Access Token
+  const currentLoggedInUserId = useMemo(() => {
+    if (reduxUser?.id) return reduxUser.id;
+    const localId = localStorage.getItem('user_id');
+    if (localId && localId !== 'undefined' && localId !== 'null') return localId;
+
+    try {
+      const token = localStorage.getItem('access_token');
+      if (!token) return null;
+      const base64Url = token.split('.')[1];
+      if (!base64Url) return null;
+      let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      while (base64.length % 4) base64 += '=';
+      const payload = JSON.parse(decodeURIComponent(escape(window.atob(base64))));
+      return payload.user_id || payload.id || null;
+    } catch (e) {
+      console.error('Failed to parse fallback token in Profile:', e);
+      return null;
+    }
+  }, [reduxUser?.id]);
 
   const [profile, setProfile] = useState({
     displayName: reduxUser?.displayName || localStorage.getItem('display_name') || '',
@@ -26,7 +46,7 @@ export default function Profile() {
   // File Upload & Cropper States
   const [cropModalOpen, setCropModalOpen] = useState(false);
   const [selectedRawImage, setSelectedRawImage] = useState(null);
-  const [uploadType, setUploadType] = useState('avatar'); // 'avatar' | 'cover'
+  const [uploadType, setUploadType] = useState('avatar');
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -43,7 +63,11 @@ export default function Profile() {
 
   // Fetch initial profile from GET /profile/:id
   const fetchProfileData = useCallback(async () => {
-    if (!currentLoggedInUserId) return;
+    if (!currentLoggedInUserId) {
+      setLoadingProfile(false);
+      return;
+    }
+
     setLoadingProfile(true);
     try {
       const res = await userApi.get(`/profile/${currentLoggedInUserId}`);

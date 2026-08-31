@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { userApi } from '../services/api/client';
+import { useAuth } from '../context/AuthContext';
 import FriendControl from '../components/FriendControl';
 import BlockedList from '../components/BlockedList';
 import UserCard from '../components/UserCard';
 import ActiveFriendsBar from '../components/ActiveFriendsBar';
 
-// Custom Debounce Hook to avoid API spam on fast typing
+// Custom Debounce Hook
 function useDebounce(value, delay = 300) {
   const [debouncedValue, setDebouncedValue] = useState(value);
   useEffect(() => {
@@ -18,7 +19,28 @@ function useDebounce(value, delay = 300) {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const userId = localStorage.getItem('user_id');
+  const { token, userId: authUserId, isInitializing } = useAuth();
+
+  // ⚡ Robust User ID resolution: AuthContext -> LocalStorage -> Decoded JWT
+  const activeUserId = useMemo(() => {
+    if (authUserId) return authUserId;
+    const localId = localStorage.getItem('user_id');
+    if (localId && localId !== 'undefined' && localId !== 'null') return localId;
+
+    try {
+      const activeToken = token || localStorage.getItem('access_token');
+      if (!activeToken) return null;
+      const base64Url = activeToken.split('.')[1];
+      if (!base64Url) return null;
+      let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      while (base64.length % 4) base64 += '=';
+      const payload = JSON.parse(decodeURIComponent(escape(window.atob(base64))));
+      return payload.user_id || payload.id || null;
+    } catch (e) {
+      console.error('Failed to parse token fallback in Dashboard:', e);
+      return null;
+    }
+  }, [authUserId, token]);
 
   // Search Inputs
   const [searchName, setSearchName] = useState('');
@@ -40,7 +62,6 @@ export default function Dashboard() {
   const [isFetchingUI, setIsFetchingUI] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
 
-  // ⚡ Ref to maintain stable fetch status without breaking useCallback dependencies
   const isFetchingRef = useRef(false);
 
   // UI Control & Refresh Signals
@@ -109,7 +130,6 @@ export default function Dashboard() {
         const freshFriends = friendsRes.value.data.data || [];
         setFriends(freshFriends);
 
-        // ⚡ Map friend online status directly to feed cards
         const friendOnlineMap = new Map(
           freshFriends.map((f) => [String(f.user_id || f.id), f.is_online])
         );
@@ -133,9 +153,12 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Initial Auth & Polling Setup (Fast 1.5s background polling for live presence)
+  // Initial Auth & Polling Setup
   useEffect(() => {
-    if (!localStorage.getItem('access_token') || !userId) {
+    if (isInitializing) return;
+
+    const currentToken = token || localStorage.getItem('access_token');
+    if (!currentToken) {
       navigate('/login');
       return;
     }
@@ -144,10 +167,10 @@ export default function Dashboard() {
 
     const interval = setInterval(() => {
       syncFriendsAndPending();
-    }, 1500);
+    }, 2500);
 
     return () => clearInterval(interval);
-  }, [userId, navigate, syncFriendsAndPending]);
+  }, [token, isInitializing, navigate, syncFriendsAndPending]);
 
   // ⚡ DEBOUNCED SEARCH TRIGGER (Resets feed when typing)
   useEffect(() => {
@@ -177,11 +200,11 @@ export default function Dashboard() {
     return () => observer.unobserve(target);
   }, [hasNext, debouncedQuery, debouncedLocation, fetchSearchResults]);
 
-  // ⚡ FAST O(1) LOOKUP HASH SETS
+  // Fast Lookups
   const friendSet = useMemo(() => new Set(friends.map((f) => String(f.user_id || f.id))), [friends]);
   const pendingSet = useMemo(() => new Set(pendingRequests.map((p) => String(p.sender_id))), [pendingRequests]);
 
-  // ⚡ INSTANT OPTIMISTIC ACTION HANDLERS
+  // Optimistic Handlers
   const handleSendRequest = useCallback(async (targetId, name) => {
     setSentRequests((prev) => new Set(prev).add(String(targetId)));
     setActionUserId(targetId);
@@ -242,7 +265,7 @@ export default function Dashboard() {
   }, [debouncedQuery, debouncedLocation, fetchSearchResults, showToast]);
 
   return (
-    <div className="min-h-screen w-full bg-slate-950 text-slate-100 font-sans pb-20 relative selection:bg-indigo-500 selection:text-white">
+    <div className="w-full flex-1 bg-slate-950 text-slate-100 font-sans pb-16 relative selection:bg-indigo-500 selection:text-white">
       
       {/* TOAST NOTIFICATIONS */}
       {toast && (
@@ -266,17 +289,17 @@ export default function Dashboard() {
       <ActiveFriendsBar friends={friends} />
 
       {/* MAIN LAYOUT */}
-      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
+      <main className="max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-8">
         
         {/* LEFT COLUMN: SEARCH + CONTROL CENTERS */}
-        <section className="lg:col-span-4 space-y-6">
-          <div className="rounded-2xl border border-slate-800/80 bg-slate-900/50 backdrop-blur-xl p-5 flex flex-col h-fit shadow-2xl space-y-4">
+        <section className="lg:col-span-4 space-y-4 sm:space-y-6">
+          <div className="rounded-2xl border border-slate-800/80 bg-slate-900/50 backdrop-blur-xl p-4 sm:p-5 flex flex-col h-fit shadow-2xl space-y-3 sm:space-y-4">
             <h3 className="text-xs font-bold uppercase tracking-wider font-mono text-slate-200 flex items-center justify-between pb-2 border-b border-slate-800">
-              <span>🔍 Real-Time Search Engine</span>
+              <span>🔍 Search Engine</span>
               {isFetchingUI && <span className="text-[10px] text-indigo-400 animate-pulse font-bold">Querying...</span>}
             </h3>
 
-            <div className="space-y-3">
+            <div className="space-y-2.5 sm:space-y-3">
               <div>
                 <label className="block text-[10px] font-bold uppercase tracking-wider mb-1 font-mono text-slate-400">
                   Search Name / Bio
@@ -287,10 +310,10 @@ export default function Dashboard() {
                     value={searchName}
                     onChange={(e) => setSearchName(e.target.value)}
                     placeholder="Type name to query..."
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-800 bg-slate-950 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500 transition-all"
+                    className="w-full px-3.5 py-2 sm:py-2.5 rounded-xl border border-slate-800 bg-slate-950 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500 transition-all"
                   />
                   {searchName && (
-                    <button onClick={() => setSearchName('')} className="absolute right-3 top-2.5 text-xs text-slate-500 hover:text-white font-bold">✕</button>
+                    <button onClick={() => setSearchName('')} className="absolute right-3 top-2 text-xs text-slate-500 hover:text-white font-bold p-1">✕</button>
                   )}
                 </div>
               </div>
@@ -305,10 +328,10 @@ export default function Dashboard() {
                     value={searchLocation}
                     onChange={(e) => setSearchLocation(e.target.value)}
                     placeholder="City, region..."
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-800 bg-slate-950 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500 transition-all"
+                    className="w-full px-3.5 py-2 sm:py-2.5 rounded-xl border border-slate-800 bg-slate-950 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500 transition-all"
                   />
                   {searchLocation && (
-                    <button onClick={() => setSearchLocation('')} className="absolute right-3 top-2.5 text-xs text-slate-500 hover:text-white font-bold">✕</button>
+                    <button onClick={() => setSearchLocation('')} className="absolute right-3 top-2 text-xs text-slate-500 hover:text-white font-bold p-1">✕</button>
                   )}
                 </div>
               </div>
@@ -331,8 +354,8 @@ export default function Dashboard() {
         </section>
 
         {/* RIGHT COLUMN: PAGINATED USER DIRECTORY FEED */}
-        <section className="lg:col-span-8 flex flex-col space-y-4">
-          <div className="rounded-2xl border border-slate-800/80 bg-slate-900/50 backdrop-blur-xl px-5 py-3.5 flex items-center justify-between shadow-lg">
+        <section className="lg:col-span-8 flex flex-col space-y-3 sm:space-y-4">
+          <div className="rounded-2xl border border-slate-800/80 bg-slate-900/50 backdrop-blur-xl px-4 sm:px-5 py-3 sm:py-3.5 flex items-center justify-between shadow-lg">
             <h2 className="text-xs font-black uppercase tracking-wider font-mono text-slate-200">
               Community Feed ({users.length})
             </h2>
@@ -343,14 +366,14 @@ export default function Dashboard() {
 
           {/* SKELETON LOADING */}
           {initialLoading ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
               {[1, 2, 3, 4].map((n) => (
-                <div key={n} className="h-60 rounded-2xl bg-slate-900/40 border border-slate-800 animate-pulse p-5" />
+                <div key={n} className="h-48 sm:h-60 rounded-2xl bg-slate-900/40 border border-slate-800 animate-pulse p-4 sm:p-5" />
               ))}
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-5">
                 {users.length > 0 ? (
                   users.map((user) => (
                     <UserCard
@@ -366,14 +389,14 @@ export default function Dashboard() {
                     />
                   ))
                 ) : (
-                  <div className="col-span-full py-16 rounded-2xl border border-dashed border-slate-800 text-center font-mono text-xs text-slate-500 bg-slate-900/20">
+                  <div className="col-span-full py-12 sm:py-16 rounded-2xl border border-dashed border-slate-800 text-center font-mono text-xs text-slate-500 bg-slate-900/20">
                     No members match your search criteria.
                   </div>
                 )}
               </div>
 
               {/* INFINITE SCROLL OBSERVER TARGET */}
-              <div ref={observerTarget} className="py-6 flex justify-center items-center">
+              <div ref={observerTarget} className="py-4 sm:py-6 flex justify-center items-center">
                 {isFetchingUI && page > 1 && (
                   <div className="flex items-center gap-2 text-xs font-mono text-indigo-400 animate-pulse">
                     <div className="h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />

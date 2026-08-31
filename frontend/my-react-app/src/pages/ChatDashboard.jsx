@@ -38,6 +38,26 @@ export default function ChatDashboard() {
     setTypingStatus,
   } = useChatStore();
 
+  // ⚡ Robust User ID resolution: LocalStorage -> Fallback JWT decoding
+  const currentUserId = useMemo(() => {
+    const localId = localStorage.getItem('user_id');
+    if (localId && localId !== 'undefined' && localId !== 'null') return localId;
+
+    try {
+      const token = localStorage.getItem('access_token');
+      if (!token) return null;
+      const base64Url = token.split('.')[1];
+      if (!base64Url) return null;
+      let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      while (base64.length % 4) base64 += '=';
+      const payload = JSON.parse(decodeURIComponent(escape(window.atob(base64))));
+      return payload.user_id || payload.id || null;
+    } catch (e) {
+      console.error('Failed to parse token fallback in ChatDashboard:', e);
+      return null;
+    }
+  }, []);
+
   const [inputText, setInputText] = useState('');
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [loadingFriends, setLoadingFriends] = useState(true);
@@ -51,7 +71,7 @@ export default function ChatDashboard() {
   const fileInputRef = useRef(null);
 
   const [mobileShowChat, setMobileShowChat] = useState(false);
-  const [isContextOpen, setIsContextOpen] = useState(false); // default closed on mobile
+  const [isContextOpen, setIsContextOpen] = useState(false);
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [selectedMembers, setSelectedMembers] = useState([]);
@@ -60,7 +80,6 @@ export default function ChatDashboard() {
   // Calling States
   const [activeCallType, setActiveCallType] = useState('audio');
 
-  const currentUserId = localStorage.getItem('user_id');
   const chatBottomRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const lastTypingSentRef = useRef(false);
@@ -91,7 +110,7 @@ export default function ChatDashboard() {
 
   // Background Data Sync
   const syncData = useCallback(async () => {
-    if (isSyncingRef.current) return;
+    if (isSyncingRef.current || !currentUserId) return;
     isSyncingRef.current = true;
     try {
       const [friendsRes, roomsRes] = await Promise.allSettled([
@@ -283,7 +302,7 @@ export default function ChatDashboard() {
 
   const handleCreateGroupSubmit = async (e) => {
     e.preventDefault();
-    if (!groupName.trim() || selectedMembers.length === 0 || isCreatingGroup) return;
+    if (!groupName.trim() || selectedMembers.length === 0 || isCreatingGroup || !currentUserId) return;
 
     setIsCreatingGroup(true);
     try {
@@ -362,7 +381,7 @@ export default function ChatDashboard() {
   const selectFriendChat = useCallback((friend) => {
     const friendId = String(friend.user_id || friend.id);
     const friendName = friend.display_name || friend.name || "Friend";
-    const ids = [String(currentUserId), friendId].sort();
+    const ids = [String(currentUserId || '0'), friendId].sort();
     const directRoomUUID = generateValidRoomUUID(ids[0], ids[1]);
 
     setActiveTarget({
