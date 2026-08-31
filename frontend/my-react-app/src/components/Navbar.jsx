@@ -30,13 +30,13 @@ export default function Navbar() {
     if (savedAvatar) setAvatarUrl(savedAvatar);
   }, [location]);
 
-  // Automatically close all menus whenever route changes
+  // Close menus on route changes
   useEffect(() => {
     setMobileMenuOpen(false);
     setDropdownOpen(false);
   }, [location.pathname]);
 
-  // Click outside listener spanning the entire navbar and drawer
+  // Click outside listener spanning navbar container
   useEffect(() => {
     function handleClickOutside(event) {
       if (navbarRef.current && !navbarRef.current.contains(event.target)) {
@@ -72,7 +72,7 @@ export default function Navbar() {
   return (
     <nav 
       ref={navbarRef}
-      className="w-full bg-slate-950/95 border-b border-slate-800/80 backdrop-blur-2xl sticky top-0 z-[100] px-4 sm:px-8 py-3 text-slate-100 font-sans transition-colors duration-300 select-none"
+      className="w-full bg-slate-950/95 border-b border-slate-800/80 backdrop-blur-2xl sticky top-0 z-[100] px-4 sm:px-8 py-3 text-slate-100 font-sans transition-colors duration-300 select-none relative"
     >
       <div className="flex items-center justify-between">
         
@@ -141,7 +141,7 @@ export default function Navbar() {
         {/* RIGHT ACTION CONTROLS */}
         <div className="flex items-center space-x-2 sm:space-x-3">
 
-          {/* LIVE REALTIME SOCKET STATUS BADGE (Desktop) */}
+          {/* REALTIME SOCKET STATUS (Desktop) */}
           <div className="hidden sm:flex items-center">
             {currentStatus === 'CONNECTED' && (
               <div className="flex items-center px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-[10px] font-mono gap-2 text-emerald-400">
@@ -166,8 +166,8 @@ export default function Navbar() {
             )}
           </div>
 
-          {/* USER AVATAR & DROPDOWN MENU */}
-          <div className="relative" ref={dropdownRef}>
+          {/* USER AVATAR & DROPDOWN MENU (Desktop) */}
+          <div className="relative hidden md:block" ref={dropdownRef}>
             <button
               type="button"
               onClick={() => setDropdownOpen(!dropdownOpen)}
@@ -180,7 +180,7 @@ export default function Navbar() {
                   {displayName.substring(0, 2).toUpperCase()}
                 </div>
               )}
-              <span className="text-[10px] text-slate-500 hidden sm:inline">{dropdownOpen ? '▲' : '▼'}</span>
+              <span className="text-[10px] text-slate-500">{dropdownOpen ? '▲' : '▼'}</span>
             </button>
 
             {dropdownOpen && (
@@ -220,7 +220,7 @@ export default function Navbar() {
             <button
               type="button"
               onClick={() => setMobileMenuOpen((prev) => !prev)}
-              className="p-2.5 rounded-xl text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-800 focus:outline-none transition-all cursor-pointer"
+              className="p-2 rounded-xl text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-800 focus:outline-none transition-all cursor-pointer flex items-center justify-center"
               aria-label="Toggle Navigation Menu"
             >
               {mobileMenuOpen ? (
@@ -238,76 +238,78 @@ export default function Navbar() {
         </div>
       </div>
 
-      {/* MOBILE COLLAPSIBLE DRAWER */}
+      {/* COMPACT FLOATING MOBILE DRAWER */}
       {mobileMenuOpen && (
-        <div className="md:hidden mt-3 pt-3 border-t border-slate-800/80 space-y-2 animate-in fade-in slide-in-from-top-2 duration-150 relative z-[110]">
+        <div className="md:hidden absolute right-4 top-16 w-64 bg-slate-900/95 border border-slate-800/90 backdrop-blur-2xl rounded-2xl p-2.5 shadow-2xl z-[120] space-y-1 animate-in fade-in slide-in-from-top-3 duration-200">
+          
+          {/* User Preview Header */}
+          <div className="px-3 py-2 bg-slate-950/60 rounded-xl border border-slate-800/60 flex items-center gap-2.5 mb-1.5">
+            {avatarUrl ? (
+              <img src={avatarUrl} alt="Profile" className="h-7 w-7 rounded-lg object-cover border border-indigo-500/40 shrink-0" />
+            ) : (
+              <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center font-bold text-white text-[10px] shrink-0">
+                {displayName.substring(0, 2).toUpperCase()}
+              </div>
+            )}
+            <div className="truncate">
+              <p className="text-xs font-bold text-white truncate">{displayName}</p>
+              <div className="flex items-center gap-1 font-mono text-[9px]">
+                <span className={`h-1.5 w-1.5 rounded-full ${currentStatus === 'CONNECTED' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`}></span>
+                <span className="text-slate-400">{currentStatus === 'CONNECTED' ? 'Online' : 'Offline'}</span>
+              </div>
+            </div>
+          </div>
+
           <button
             type="button"
             onClick={() => handleNavClick("/dashboard")}
-            className={`w-full px-4 py-3 rounded-xl text-xs font-bold transition-all flex items-center justify-between cursor-pointer active:scale-[0.99] ${
+            className={`w-full px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-between cursor-pointer ${
               isActive("/dashboard")
-                ? "bg-indigo-600/20 text-indigo-300 border border-indigo-500/40 shadow-inner"
-                : "text-slate-200 bg-slate-900/90 border border-slate-800/80 active:bg-slate-800"
+                ? "bg-indigo-600/20 text-indigo-300 border border-indigo-500/40"
+                : "text-slate-300 hover:text-white hover:bg-slate-800/60"
             }`}
           >
-            <div className="flex items-center gap-3">
-              <span className="text-base">🏠</span>
-              <span>Dashboard</span>
-            </div>
-            <span className="text-slate-500 text-sm">→</span>
+            <span className="flex items-center gap-2"><span>🏠</span> Dashboard</span>
+            <span className="text-slate-500 text-xs">→</span>
           </button>
 
           <button
             type="button"
             onClick={() => handleNavClick("/chat-test")}
-            className={`w-full px-4 py-3 rounded-xl text-xs font-bold transition-all flex items-center justify-between cursor-pointer active:scale-[0.99] ${
+            className={`w-full px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-between cursor-pointer ${
               isActive("/chat-test")
-                ? "bg-indigo-600/20 text-indigo-300 border border-indigo-500/40 shadow-inner"
-                : "text-slate-200 bg-slate-900/90 border border-slate-800/80 active:bg-slate-800"
+                ? "bg-indigo-600/20 text-indigo-300 border border-indigo-500/40"
+                : "text-slate-300 hover:text-white hover:bg-slate-800/60"
             }`}
           >
-            <div className="flex items-center gap-3">
-              <span className="text-base">💬</span>
-              <span>WS Chat</span>
-            </div>
-
-            <div className="flex items-center gap-1.5 font-mono text-[10px]">
-              {currentStatus === 'CONNECTED' && (
-                <span className="flex items-center gap-1 text-emerald-400">
-                  <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  ONLINE
-                </span>
-              )}
-              {currentStatus === 'CONNECTING' && (
-                <span className="flex items-center gap-1 text-amber-400">
-                  <span className="h-2 w-2 rounded-full bg-amber-400 animate-ping"></span>
-                  CONNECTING
-                </span>
-              )}
-              {currentStatus === 'DISCONNECTED' && (
-                <span className="flex items-center gap-1 text-rose-400">
-                  <span className="h-2 w-2 rounded-full bg-rose-500"></span>
-                  OFFLINE
-                </span>
-              )}
-            </div>
+            <span className="flex items-center gap-2"><span>💬</span> WS Chat</span>
+            <span className="text-slate-500 text-xs">→</span>
           </button>
 
           <button
             type="button"
             onClick={() => handleNavClick("/profile")}
-            className={`w-full px-4 py-3 rounded-xl text-xs font-bold transition-all flex items-center justify-between cursor-pointer active:scale-[0.99] ${
+            className={`w-full px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-between cursor-pointer ${
               isActive("/profile")
-                ? "bg-indigo-600/20 text-indigo-300 border border-indigo-500/40 shadow-inner"
-                : "text-slate-200 bg-slate-900/90 border border-slate-800/80 active:bg-slate-800"
+                ? "bg-indigo-600/20 text-indigo-300 border border-indigo-500/40"
+                : "text-slate-300 hover:text-white hover:bg-slate-800/60"
             }`}
           >
-            <div className="flex items-center gap-3">
-              <span className="text-base">👤</span>
-              <span>Profile</span>
-            </div>
-            <span className="text-slate-500 text-sm">→</span>
+            <span className="flex items-center gap-2"><span>👤</span> Profile</span>
+            <span className="text-slate-500 text-xs">→</span>
           </button>
+
+          <div className="pt-1 border-t border-slate-800/80">
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="w-full px-3 py-2 rounded-xl text-xs font-bold text-rose-400 hover:bg-rose-500/10 transition-colors flex items-center justify-between cursor-pointer"
+            >
+              <span className="flex items-center gap-2"><span>🚪</span> Sign Out</span>
+              <span className="text-xs font-mono">⎋</span>
+            </button>
+          </div>
+
         </div>
       )}
     </nav>
