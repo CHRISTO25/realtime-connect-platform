@@ -5,6 +5,10 @@ import { userApi } from '../services/api/client';
 
 const AuthContext = createContext(null);
 
+const API_BASE_URL = 
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_GATEWAY_URL) || 
+  'https://realtime-connect-platform.onrender.com';
+
 export const AuthProvider = ({ children }) => {
   const dispatch = useDispatch();
 
@@ -77,7 +81,8 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      const response = await fetch('http://localhost:8001/api/v1/auth/login', {
+      //await fetch('http://localhost:8001/api/v1/auth/login'
+      const response = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
