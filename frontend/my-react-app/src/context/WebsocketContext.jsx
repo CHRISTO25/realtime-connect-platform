@@ -38,9 +38,12 @@ export const WebSocketProvider = ({ children }) => {
 
     isManuallyClosedRef.current = false;
     setConnectionStatus('CONNECTING');
-    
+   
+    const rawGateway = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_GATEWAY_URL) ||
+  'https://chat-gateway-service.onrender.com';
+    const WS_BASE_URL = rawGateway.replace(/^http/, 'ws');
     // ⚡ DAY 38: Routes through API Gateway (:8080) which load-balances to healthy chat nodes
-    const wsUrl = `ws://localhost:8080/ws?token=${token}`;
+    const wsUrl = `${WS_BASE_URL}/ws?token=${token}`;
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
