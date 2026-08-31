@@ -3,7 +3,7 @@ import axios from 'axios';
 // ✅ Correct (clean string, no brackets, no markdown)
 const API_GATEWAY_URL = 
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_GATEWAY_URL) || 
-  'https://realtime-connect-platform.onrender.com';
+ 'https://chat-gateway-service.onrender.com';
 
 // 1. Universal API instance for User, Friend, Profile, and Chat actions
 export const userApi = axios.create({

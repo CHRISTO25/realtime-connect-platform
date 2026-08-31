@@ -8,7 +8,7 @@ const AuthContext = createContext(null);
 // ✅ Correct (clean string, no brackets, no markdown)
 const API_BASE_URL = 
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_GATEWAY_URL) || 
-  'https://realtime-connect-platform.onrender.com';
+  'https://chat-gateway-service.onrender.com';
 
 export const AuthProvider = ({ children }) => {
   const dispatch = useDispatch();
