@@ -41,13 +41,13 @@ func main() {
 	}
 	log.Println("Database table migrations verified and completed successfully")
 
-	// ⚡ 5. Initialize Redis Client (Supports Upstash URI or Host:Port)
-	var redisClient *redis.Client
-	redisTarget := cfg.RedisAddr
+	// ⚡ 5. Initialize Redis Client (Check REDIS_URL first for Upstash TLS)
+	redisTarget := os.Getenv("REDIS_URL")
 	if redisTarget == "" {
-		redisTarget = os.Getenv("REDIS_URL")
+		redisTarget = cfg.RedisAddr
 	}
 
+	var redisClient *redis.Client
 	if strings.HasPrefix(redisTarget, "redis://") || strings.HasPrefix(redisTarget, "rediss://") {
 		opt, err := redis.ParseURL(redisTarget)
 		if err != nil {
@@ -56,7 +56,7 @@ func main() {
 		} else {
 			redisClient = redis.NewClient(opt)
 		}
-	} else if redisTarget != "" {
+	} else if redisTarget != "" && redisTarget != "localhost:6379" && redisTarget != "redis:6379" {
 		redisClient = redis.NewClient(&redis.Options{
 			Addr:     redisTarget,
 			Password: "",
