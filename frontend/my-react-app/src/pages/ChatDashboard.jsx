@@ -51,7 +51,7 @@ export default function ChatDashboard() {
   const fileInputRef = useRef(null);
 
   const [mobileShowChat, setMobileShowChat] = useState(false);
-  const [isContextOpen, setIsContextOpen] = useState(true);
+  const [isContextOpen, setIsContextOpen] = useState(false); // default closed on mobile
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [selectedMembers, setSelectedMembers] = useState([]);
@@ -254,7 +254,6 @@ export default function ChatDashboard() {
     setUploadProgress(0);
   }, [previewUrl]);
 
-  // Voice Call
   const handleInitiateAudioCall = async () => {
     if (!recipientId) return alert("Select a direct friend to initiate a voice call.");
     try {
@@ -267,7 +266,6 @@ export default function ChatDashboard() {
     }
   };
 
-  // Video Call
   const handleInitiateVideoCall = async () => {
     if (!recipientId) return alert("Select a direct friend to initiate a video call.");
     try {
@@ -388,36 +386,36 @@ export default function ChatDashboard() {
   }, [setActiveTarget]);
 
   return (
-    <div className="h-[calc(100vh-64px)] w-screen bg-slate-950 text-slate-100 font-sans flex flex-col items-center overflow-hidden selection:bg-indigo-500 selection:text-white">
+    <div className="h-[calc(100dvh-64px)] w-full bg-slate-950 text-slate-100 font-sans flex flex-col items-center overflow-hidden selection:bg-indigo-500 selection:text-white">
       
       {/* GROUP CREATION MODAL */}
       {isGroupModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xl flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-800/80 rounded-3xl w-full max-w-md p-7 shadow-2xl space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xl flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-800/80 rounded-2xl sm:rounded-3xl w-full max-w-md p-5 sm:p-7 shadow-2xl space-y-4 sm:space-y-6">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-3 sm:pb-4">
               <div className="flex items-center gap-2">
-                <div className="h-8 w-8 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm shadow-md">👥</div>
-                <h3 className="text-sm font-bold text-white uppercase font-mono tracking-wider">Create Group Chat</h3>
+                <div className="h-7 w-7 sm:h-8 sm:w-8 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-xs sm:text-sm shadow-md">👥</div>
+                <h3 className="text-xs sm:text-sm font-bold text-white uppercase font-mono tracking-wider">Create Group Chat</h3>
               </div>
               <button onClick={() => setIsGroupModalOpen(false)} className="text-slate-400 hover:text-white font-bold text-xs bg-slate-800/60 hover:bg-slate-700 h-7 w-7 rounded-full flex items-center justify-center transition-all cursor-pointer">✕</button>
             </div>
 
-            <form onSubmit={handleCreateGroupSubmit} className="space-y-4">
+            <form onSubmit={handleCreateGroupSubmit} className="space-y-3 sm:space-y-4">
               <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 font-mono mb-1.5">Group Name</label>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 font-mono mb-1">Group Name</label>
                 <input
                   type="text"
                   value={groupName}
                   onChange={(e) => setGroupName(e.target.value)}
                   placeholder="e.g. Core Engineering Guild..."
                   required
-                  className="w-full bg-slate-950 border border-slate-800/80 rounded-2xl px-4 py-3 text-xs text-white outline-none focus:border-indigo-500 transition-all shadow-inner"
+                  className="w-full bg-slate-950 border border-slate-800/80 rounded-xl sm:rounded-2xl px-3.5 py-2.5 sm:px-4 sm:py-3 text-xs text-white outline-none focus:border-indigo-500 transition-all shadow-inner"
                 />
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 font-mono mb-2">Select Members ({friends.length})</label>
-                <div className="max-h-48 overflow-y-auto space-y-2 pr-1 scrollbar-thin scrollbar-thumb-slate-800">
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 font-mono mb-1.5">Select Members ({friends.length})</label>
+                <div className="max-h-36 sm:max-h-48 overflow-y-auto space-y-1.5 sm:space-y-2 pr-1 scrollbar-thin scrollbar-thumb-slate-800">
                   {friends.map((friend) => {
                     const fId = String(friend.user_id || friend.id);
                     const isChecked = selectedMembers.includes(fId);
@@ -425,7 +423,7 @@ export default function ChatDashboard() {
                       <div
                         key={fId}
                         onClick={() => setSelectedMembers(prev => isChecked ? prev.filter(id => id !== fId) : [...prev, fId])}
-                        className={`flex items-center justify-between p-3 rounded-2xl text-xs cursor-pointer transition-all ${isChecked ? 'bg-indigo-600/20 border border-indigo-500/50 text-indigo-200 shadow-md shadow-indigo-500/10' : 'bg-slate-950/40 border border-slate-800/60 text-slate-300 hover:bg-slate-800/40'}`}
+                        className={`flex items-center justify-between p-2.5 sm:p-3 rounded-xl sm:rounded-2xl text-xs cursor-pointer transition-all ${isChecked ? 'bg-indigo-600/20 border border-indigo-500/50 text-indigo-200 shadow-md shadow-indigo-500/10' : 'bg-slate-950/40 border border-slate-800/60 text-slate-300 hover:bg-slate-800/40'}`}
                       >
                         <span className="font-bold truncate">{friend.display_name || friend.name || 'Friend'}</span>
                         <input type="checkbox" checked={isChecked} readOnly className="rounded bg-slate-950 border-slate-700 text-indigo-600 pointer-events-none" />
@@ -435,19 +433,19 @@ export default function ChatDashboard() {
                 </div>
               </div>
 
-              <div className="flex gap-3 pt-2">
+              <div className="flex gap-2.5 pt-2">
                 <button
                   type="button"
                   onClick={() => setIsGroupModalOpen(false)}
                   disabled={isCreatingGroup}
-                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-2xl text-xs transition-all cursor-pointer"
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 sm:py-3 rounded-xl sm:rounded-2xl text-xs transition-all cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={!groupName.trim() || selectedMembers.length === 0 || isCreatingGroup}
-                  className="flex-1 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold py-3 rounded-2xl text-xs transition-all disabled:opacity-40 cursor-pointer shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2"
+                  className="flex-1 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold py-2.5 sm:py-3 rounded-xl sm:rounded-2xl text-xs transition-all disabled:opacity-40 cursor-pointer shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2"
                 >
                   {isCreatingGroup ? "Creating..." : "Create Group 🚀"}
                 </button>
@@ -457,22 +455,22 @@ export default function ChatDashboard() {
         </div>
       )}
 
-      {/* ACTIVE FRIENDS BAR */}
-      <div className="w-full shrink-0">
+      {/* ACTIVE FRIENDS BAR (Visible only when not in full mobile chat view) */}
+      <div className={`w-full shrink-0 ${mobileShowChat ? 'hidden sm:block' : 'block'}`}>
         <ActiveFriendsBar friends={friends} onSelectFriend={selectFriendChat} />
       </div>
 
       {/* MAIN CHAT GRID */}
-      <main className="max-w-[1600px] w-full mx-auto px-3 sm:px-6 py-3 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-6 min-h-0 overflow-hidden">
+      <main className="max-w-[1600px] w-full mx-auto px-2 sm:px-4 lg:px-6 py-2 sm:py-3 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-6 min-h-0 overflow-hidden">
         
         {/* LEFT PANEL: SIDEBAR */}
-        <section className={`lg:col-span-3 bg-slate-900/40 border border-slate-800/80 rounded-3xl p-4 flex flex-col justify-between backdrop-blur-2xl shadow-2xl h-full overflow-hidden min-h-0 ${mobileShowChat ? 'hidden lg:flex' : 'flex'}`}>
+        <section className={`lg:col-span-3 bg-slate-900/40 border border-slate-800/80 rounded-2xl sm:rounded-3xl p-3 sm:p-4 flex flex-col justify-between backdrop-blur-2xl shadow-2xl h-full overflow-hidden min-h-0 ${mobileShowChat ? 'hidden lg:flex' : 'flex'}`}>
           <div className="space-y-3 flex-1 flex flex-col min-h-0 overflow-hidden">
             <div className="flex items-center justify-between px-1 shrink-0">
               <h3 className="text-xs font-bold uppercase tracking-wider font-mono text-slate-300">💬 Conversations</h3>
               <button
                 onClick={() => setIsGroupModalOpen(true)}
-                className="text-[10px] font-mono font-bold bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-xl transition-all shadow-md shadow-indigo-500/20 cursor-pointer"
+                className="text-[10px] font-mono font-bold bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1.5 rounded-xl transition-all shadow-md shadow-indigo-500/20 cursor-pointer"
               >
                 + Group
               </button>
@@ -483,13 +481,13 @@ export default function ChatDashboard() {
                 setActiveTarget({ id: GLOBAL_ROOM_ID, name: "Global Lounge", type: "GLOBAL", isOnline: true });
                 setMobileShowChat(true);
               }}
-              className={`w-full flex items-center gap-3 p-3 rounded-2xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
+              className={`w-full flex items-center gap-3 p-2.5 sm:p-3 rounded-2xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
                 activeTarget.id === GLOBAL_ROOM_ID
                   ? "bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg shadow-indigo-500/25"
                   : "bg-slate-950/60 border border-slate-800/80 text-slate-300 hover:text-white hover:border-slate-700"
               }`}
             >
-              <div className="h-9 w-9 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-sm shrink-0">🌐</div>
+              <div className="h-8 w-8 sm:h-9 sm:w-9 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-sm shrink-0">🌐</div>
               <div className="text-left truncate">
                 <p className="truncate font-bold">Global Lounge</p>
                 <p className="text-[10px] text-slate-400 font-normal">Broadcast Network</p>
@@ -499,16 +497,16 @@ export default function ChatDashboard() {
             {rooms.filter(r => r.type === 'GROUP').length > 0 && (
               <div className="space-y-1 shrink-0">
                 <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1 font-mono">Groups</h4>
-                <div className="space-y-1 max-h-28 overflow-y-auto pr-1 scrollbar-thin">
+                <div className="space-y-1 max-h-24 sm:max-h-28 overflow-y-auto pr-1 scrollbar-thin">
                   {rooms.filter(r => r.type === 'GROUP').map(room => (
                     <button
                       key={room.id}
                       onClick={() => selectGroupChat(room)}
-                      className={`w-full flex items-center gap-3 p-2.5 rounded-2xl text-xs font-medium transition-all cursor-pointer ${
+                      className={`w-full flex items-center gap-2.5 p-2 rounded-xl text-xs font-medium transition-all cursor-pointer ${
                         activeTarget.id === room.id ? "bg-purple-600/20 border border-purple-500/40 text-purple-200" : "bg-slate-950/40 hover:bg-slate-800/40 text-slate-300"
                       }`}
                     >
-                      <div className="h-8 w-8 rounded-xl bg-gradient-to-tr from-purple-500 to-pink-600 flex items-center justify-center font-bold text-white text-xs shrink-0">👥</div>
+                      <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-purple-500 to-pink-600 flex items-center justify-center font-bold text-white text-xs shrink-0">👥</div>
                       <span className="truncate font-bold">{room.name}</span>
                     </button>
                   ))}
@@ -539,24 +537,24 @@ export default function ChatDashboard() {
                       <button
                         key={friendId}
                         onClick={() => selectFriendChat(friend)}
-                        className={`w-full flex items-center justify-between p-2.5 rounded-2xl text-xs font-medium transition-all cursor-pointer ${
+                        className={`w-full flex items-center justify-between p-2 sm:p-2.5 rounded-2xl text-xs font-medium transition-all cursor-pointer ${
                           isSelected ? "bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 shadow-md" : "bg-slate-950/40 hover:bg-slate-800/40 text-slate-300"
                         }`}
                       >
-                        <div className="flex items-center gap-3 truncate">
+                        <div className="flex items-center gap-2.5 truncate">
                           <div className="relative shrink-0">
                             {friend.avatar_url ? (
-                              <img src={friend.avatar_url} alt={friend.display_name} className="h-9 w-9 rounded-xl object-cover border border-slate-800" />
+                              <img src={friend.avatar_url} alt={friend.display_name} className="h-8 w-8 sm:h-9 sm:w-9 rounded-xl object-cover border border-slate-800" />
                             ) : (
-                              <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center font-bold text-white text-xs">
+                              <div className="h-8 w-8 sm:h-9 sm:w-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center font-bold text-white text-xs">
                                 {(friend.display_name || 'F').substring(0, 2).toUpperCase()}
                               </div>
                             )}
                             <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-slate-950 ${online ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
                           </div>
                           <div className="text-left truncate">
-                            <p className="font-bold text-white truncate">{friend.display_name || friend.name || 'Friend'}</p>
-                            <p className="text-[10px] text-slate-500 font-mono">1-on-1 Session</p>
+                            <p className="font-bold text-white truncate text-xs">{friend.display_name || friend.name || 'Friend'}</p>
+                            <p className="text-[9px] text-slate-500 font-mono">1-on-1 Session</p>
                           </div>
                         </div>
                         <UserStatusBadge isOnline={online} />
@@ -569,7 +567,7 @@ export default function ChatDashboard() {
           </div>
 
           {/* Sidebar Footer Link Status */}
-          <div className="pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono shrink-0 mt-2">
+          <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] sm:text-[11px] font-mono shrink-0 mt-2">
             <div className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
               <span className="text-slate-400">Mesh Gateway:</span>
@@ -579,43 +577,44 @@ export default function ChatDashboard() {
         </section>
 
         {/* CENTER PANEL: ACTIVE CONVERSATION FEED */}
-        <section className={`lg:col-span-6 bg-slate-900/40 border border-slate-800/80 rounded-3xl p-4 sm:p-5 backdrop-blur-2xl flex flex-col justify-between shadow-2xl h-full overflow-hidden min-h-0 ${mobileShowChat ? 'flex' : 'hidden lg:flex'}`}>
+        <section className={`lg:col-span-6 bg-slate-900/40 border border-slate-800/80 rounded-2xl sm:rounded-3xl p-3 sm:p-5 backdrop-blur-2xl flex flex-col justify-between shadow-2xl h-full overflow-hidden min-h-0 ${mobileShowChat ? 'flex' : 'hidden lg:flex'}`}>
           
           {/* Header */}
-          <div className="pb-3 border-b border-slate-800/80 flex flex-col gap-2 shrink-0">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3 truncate">
+          <div className="pb-2.5 sm:pb-3 border-b border-slate-800/80 flex flex-col gap-1.5 shrink-0">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 sm:gap-3 truncate">
                 <button
                   onClick={() => setMobileShowChat(false)}
-                  className="lg:hidden p-2 rounded-2xl bg-slate-800 text-slate-200 text-xs font-bold shrink-0 cursor-pointer"
+                  className="lg:hidden p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold shrink-0 cursor-pointer"
+                  title="Back to conversations"
                 >
                   ←
                 </button>
 
-                <div className="h-10 w-10 rounded-2xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center text-sm font-bold shadow-md shrink-0">
+                <div className="h-8 w-8 sm:h-10 sm:w-10 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center text-xs sm:text-sm font-bold shadow-md shrink-0">
                   {activeTarget.type === "GLOBAL" ? "🌐" : activeTarget.type === "GROUP" ? "👥" : activeTarget.name.substring(0, 2).toUpperCase()}
                 </div>
                 <div className="truncate">
-                  <h2 className="text-xs sm:text-sm font-bold text-white flex items-center gap-2 truncate">
+                  <h2 className="text-xs sm:text-sm font-bold text-white flex items-center gap-1.5 truncate">
                     <span className="truncate">{activeTarget.name}</span>
                     {activeTarget.type === "DIRECT" && <UserStatusBadge isOnline={activeTarget.isOnline} />}
                   </h2>
-                  <p className="text-[9px] text-slate-500 font-mono truncate">Room UUID: {activeTarget.id}</p>
+                  <p className="text-[8px] sm:text-[9px] text-slate-500 font-mono truncate">ID: {activeTarget.id.substring(0, 16)}...</p>
                 </div>
               </div>
 
               {/* Action Calling Buttons */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 shrink-0">
                 <button
                   onClick={handleInitiateAudioCall}
-                  className="p-2.5 rounded-2xl bg-slate-800/80 hover:bg-emerald-600/20 text-slate-300 hover:text-emerald-400 text-xs font-mono transition-all cursor-pointer border border-slate-700/80 shadow-md"
+                  className="p-2 sm:p-2.5 rounded-xl sm:rounded-2xl bg-slate-800/80 hover:bg-emerald-600/20 text-slate-300 hover:text-emerald-400 text-xs font-mono transition-all cursor-pointer border border-slate-700/80 shadow-md"
                   title="Start Voice Call"
                 >
                   🎙️
                 </button>
                 <button
                   onClick={handleInitiateVideoCall}
-                  className="p-2.5 rounded-2xl bg-slate-800/80 hover:bg-indigo-600/20 text-slate-300 hover:text-indigo-400 text-xs font-mono transition-all cursor-pointer border border-slate-700/80 shadow-md"
+                  className="p-2 sm:p-2.5 rounded-xl sm:rounded-2xl bg-slate-800/80 hover:bg-indigo-600/20 text-slate-300 hover:text-indigo-400 text-xs font-mono transition-all cursor-pointer border border-slate-700/80 shadow-md"
                   title="Start Video Call"
                 >
                   📹
@@ -625,22 +624,22 @@ export default function ChatDashboard() {
 
             {/* Degradation Warning Badge */}
             {isDegradedMode && (
-              <div className="bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-xl flex items-center justify-between animate-in fade-in">
+              <div className="bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 rounded-xl flex items-center justify-between animate-in fade-in">
                 <div className="flex items-center space-x-2">
-                  <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
-                  <span className="text-[10px] font-mono text-amber-300">
-                    <strong>Degraded Performance:</strong> User Identity container slow/offline. Messaging operates via distributed fallback.
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                  <span className="text-[9px] sm:text-[10px] font-mono text-amber-300">
+                    Degraded Performance: Messaging operates via fallback.
                   </span>
                 </div>
-                <span className="text-[9px] font-mono uppercase bg-amber-500/20 text-amber-200 px-1.5 py-0.5 rounded border border-amber-500/30">
-                  Fallback Mode
+                <span className="text-[8px] sm:text-[9px] font-mono uppercase bg-amber-500/20 text-amber-200 px-1 py-0.5 rounded border border-amber-500/30">
+                  Fallback
                 </span>
               </div>
             )}
           </div>
 
           {/* MESSAGE STREAM */}
-          <div className="overflow-y-auto space-y-3.5 my-3 pr-2 scrollbar-thin scrollbar-thumb-slate-800 flex-1 min-h-0 relative">
+          <div className="overflow-y-auto space-y-2.5 sm:space-y-3.5 my-2 pr-1 sm:pr-2 scrollbar-thin scrollbar-thumb-slate-800 flex-1 min-h-0 relative">
             {loadingHistory ? (
               <div className="h-full flex items-center justify-center text-slate-500 text-xs font-mono">
                 <span>Loading conversation stream...</span>
@@ -657,11 +656,11 @@ export default function ChatDashboard() {
 
                 return (
                   <div key={msg.id || index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                    <div className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-3xl text-xs font-sans shadow-lg ${isMe ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-br-sm shadow-indigo-500/10' : 'bg-slate-800/90 border border-slate-700/80 text-slate-200 rounded-bl-sm'}`}>
+                    <div className={`max-w-[90%] sm:max-w-[75%] px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl sm:rounded-3xl text-xs font-sans shadow-lg break-words ${isMe ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-br-sm shadow-indigo-500/10' : 'bg-slate-800/90 border border-slate-700/80 text-slate-200 rounded-bl-sm'}`}>
                       <MediaMessageRenderer content={msg.content} />
                     </div>
 
-                    <div className="flex items-center gap-1.5 text-[9px] text-slate-500 font-mono mt-1 px-1.5">
+                    <div className="flex items-center gap-1.5 text-[9px] text-slate-500 font-mono mt-1 px-1">
                       <span>{isMe ? 'You' : `Sender: ${String(msg.sender_id).substring(0, 8)}...`}</span>
                       <span>•</span>
                       <span>{new Date(msg.created_at || msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
@@ -680,11 +679,11 @@ export default function ChatDashboard() {
 
             {isCurrentRoomTyping && (
               <div className="flex items-center gap-2 text-indigo-400 text-xs font-mono py-1 animate-pulse">
-                <div className="flex space-x-1.5 bg-slate-900 border border-indigo-500/30 px-3.5 py-2.5 rounded-3xl">
+                <div className="flex space-x-1.5 bg-slate-900 border border-indigo-500/30 px-3 py-2 rounded-2xl">
                   <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
                   <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
                   <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                  <span className="ml-2 text-[11px] text-slate-300 font-sans">Someone is typing...</span>
+                  <span className="ml-2 text-[10px] sm:text-[11px] text-slate-300 font-sans">Someone is typing...</span>
                 </div>
               </div>
             )}
@@ -694,22 +693,22 @@ export default function ChatDashboard() {
 
           {/* FILE ATTACHMENT PREVIEW */}
           {selectedFile && (
-            <div className="px-3 py-2.5 bg-slate-950 border border-slate-800/80 rounded-2xl flex items-center justify-between mb-2 shrink-0 animate-in fade-in">
-              <div className="flex items-center gap-3 truncate">
+            <div className="px-3 py-2 bg-slate-950 border border-slate-800/80 rounded-xl sm:rounded-2xl flex items-center justify-between mb-2 shrink-0 animate-in fade-in">
+              <div className="flex items-center gap-2.5 truncate">
                 {previewUrl && selectedFile.type.startsWith('image/') ? (
-                  <img src={previewUrl} alt="Preview" className="h-10 w-10 rounded-xl object-cover border border-slate-800" />
+                  <img src={previewUrl} alt="Preview" className="h-9 w-9 rounded-lg object-cover border border-slate-800" />
                 ) : (
-                  <div className="h-10 w-10 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-sm">📎</div>
+                  <div className="h-9 w-9 rounded-lg bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-sm">📎</div>
                 )}
                 <div className="truncate">
                   <p className="text-xs text-slate-200 font-bold truncate">{selectedFile.name}</p>
-                  <p className="text-[10px] text-slate-500 font-mono">{(selectedFile.size / 1024).toFixed(1)} KB</p>
+                  <p className="text-[9px] text-slate-500 font-mono">{(selectedFile.size / 1024).toFixed(1)} KB</p>
                 </div>
               </div>
 
               <button 
                 onClick={clearSelectedFile}
-                className="text-slate-400 hover:text-rose-400 text-xs font-bold h-7 w-7 rounded-full bg-slate-900 flex items-center justify-center cursor-pointer transition-all"
+                className="text-slate-400 hover:text-rose-400 text-xs font-bold h-6 w-6 rounded-full bg-slate-900 flex items-center justify-center cursor-pointer transition-all"
               >
                 ✕
               </button>
@@ -719,8 +718,8 @@ export default function ChatDashboard() {
           {/* UPLOAD PROGRESS BAR */}
           {isUploading && (
             <div className="space-y-1 mb-2 shrink-0">
-              <div className="flex justify-between text-[10px] font-mono text-indigo-400">
-                <span>Uploading attachment to cloud...</span>
+              <div className="flex justify-between text-[9px] font-mono text-indigo-400">
+                <span>Uploading attachment...</span>
                 <span>{uploadProgress}%</span>
               </div>
               <div className="h-1.5 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800">
@@ -733,7 +732,7 @@ export default function ChatDashboard() {
           )}
 
           {/* TEXT INPUT FORM */}
-          <form onSubmit={handleSendMessage} className="pt-3 border-t border-slate-800/80 flex gap-2 shrink-0 items-center">
+          <form onSubmit={handleSendMessage} className="pt-2 sm:pt-3 border-t border-slate-800/80 flex gap-1.5 sm:gap-2 shrink-0 items-center">
             <input
               type="file"
               ref={fileInputRef}
@@ -746,7 +745,7 @@ export default function ChatDashboard() {
               onClick={() => fileInputRef.current?.click()}
               disabled={!isConnected || isUploading}
               title="Attach File"
-              className="p-3 bg-slate-950 border border-slate-800 hover:border-indigo-500/50 rounded-2xl text-slate-400 hover:text-white transition-all cursor-pointer disabled:opacity-50 shrink-0"
+              className="p-2.5 sm:p-3 bg-slate-950 border border-slate-800 hover:border-indigo-500/50 rounded-xl sm:rounded-2xl text-slate-400 hover:text-white transition-all cursor-pointer disabled:opacity-50 shrink-0"
             >
               📎
             </button>
@@ -770,20 +769,22 @@ export default function ChatDashboard() {
               }}
               placeholder={isConnected ? (isUploading ? "Uploading..." : `Message ${activeTarget.name}...`) : "Gateway reconnecting..."}
               disabled={!isConnected || isUploading}
-              className="flex-1 bg-slate-950 border border-slate-800 focus:border-indigo-500/50 rounded-2xl px-4 py-3 text-xs text-white placeholder-slate-500 outline-none transition-all disabled:opacity-50 shadow-inner"
+              className="flex-1 min-w-0 bg-slate-950 border border-slate-800 focus:border-indigo-500/50 rounded-xl sm:rounded-2xl px-3 py-2.5 sm:px-4 sm:py-3 text-xs text-white placeholder-slate-500 outline-none transition-all disabled:opacity-50 shadow-inner"
             />
             <button
               type="submit"
               disabled={!isConnected || (!inputText.trim() && !selectedFile) || isUploading}
-              className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold px-5 sm:px-6 py-3 rounded-2xl text-xs transition-all disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed shadow-lg shadow-indigo-500/25 shrink-0"
+              className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl text-xs transition-all disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed shadow-lg shadow-indigo-500/25 shrink-0"
             >
-              {isUploading ? "Uploading..." : "Send ⚡"}
+              {isUploading ? "..." : "Send ⚡"}
             </button>
           </form>
         </section>
 
-        {/* RIGHT PANEL: CONTEXT METADATA */}
-        <ChatContextPanel activeTarget={activeTarget} isOpen={isContextOpen} onClose={() => setIsContextOpen(false)} />
+        {/* RIGHT PANEL: CONTEXT METADATA (Desktop only) */}
+        <div className="hidden lg:block lg:col-span-3 h-full overflow-hidden">
+          <ChatContextPanel activeTarget={activeTarget} isOpen={isContextOpen} onClose={() => setIsContextOpen(false)} />
+        </div>
 
       </main>
 

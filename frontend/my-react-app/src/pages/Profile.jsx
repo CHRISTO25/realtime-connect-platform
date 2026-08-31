@@ -232,7 +232,7 @@ export default function Profile() {
   };
 
   return (
-    <div className="min-h-[calc(100vh-64px)] w-full bg-slate-950 text-slate-100 font-sans selection:bg-indigo-500 selection:text-white">
+    <div className="w-full flex-1 bg-slate-950 text-slate-100 font-sans selection:bg-indigo-500 selection:text-white pb-16">
       {/* Hidden File Inputs */}
       <input
         type="file"
@@ -250,7 +250,7 @@ export default function Profile() {
       />
 
       {/* 1. COVER BANNER */}
-      <div className="relative h-48 sm:h-64 lg:h-80 w-full bg-slate-900 border-b border-slate-800/80 overflow-hidden group">
+      <div className="relative h-40 sm:h-56 md:h-72 w-full bg-slate-900 border-b border-slate-800/80 overflow-hidden group">
         {profile.coverUrl ? (
           <img
             src={profile.coverUrl}
@@ -259,8 +259,8 @@ export default function Profile() {
           />
         ) : (
           <div className="w-full h-full bg-gradient-to-r from-indigo-950 via-purple-950 to-slate-950 flex flex-col items-center justify-center gap-2 opacity-90">
-            <span className="text-3xl">🖼️</span>
-            <span className="text-xs text-slate-400 font-mono uppercase tracking-widest">
+            <span className="text-2xl sm:text-3xl">🖼️</span>
+            <span className="text-[10px] sm:text-xs text-slate-400 font-mono uppercase tracking-widest">
               No Background Cover
             </span>
           </div>
@@ -271,27 +271,27 @@ export default function Profile() {
         <button
           type="button"
           onClick={() => coverInputRef.current?.click()}
-          className="absolute top-4 right-4 sm:top-6 sm:right-6 z-10 bg-slate-900/80 hover:bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold backdrop-blur-xl border border-slate-700/80 shadow-2xl flex items-center gap-2 transition-all cursor-pointer"
+          className="absolute top-3 right-3 sm:top-5 sm:right-5 z-10 bg-slate-900/80 hover:bg-slate-900 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-[11px] sm:text-xs font-bold backdrop-blur-xl border border-slate-700/80 shadow-2xl flex items-center gap-1.5 transition-all cursor-pointer"
         >
-          <span>📷</span> <span className="hidden sm:inline">Change Cover</span>
+          <span>📷</span> <span>Change Cover</span>
         </button>
       </div>
 
       {/* 2. MAIN CONTAINER */}
-      <main className="max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 relative pb-20">
-        <div className="flex flex-col sm:flex-row sm:items-end justify-between -mt-16 sm:-mt-20 mb-6 gap-4">
+      <main className="max-w-5xl w-full mx-auto px-4 sm:px-6 lg:px-8 relative">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between -mt-14 sm:-mt-16 mb-6 gap-4">
           
           {/* Avatar Profile Ring */}
-          <div className="relative z-10 self-start sm:self-auto">
-            <div className="p-1 rounded-3xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 shadow-2xl">
+          <div className="relative z-10 self-start">
+            <div className="p-1 rounded-2xl sm:rounded-3xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 shadow-2xl inline-block">
               {profile.avatarUrl ? (
                 <img
                   src={profile.avatarUrl}
                   alt={profile.displayName}
-                  className="h-28 w-28 sm:h-36 sm:w-36 rounded-2xl object-cover border-4 border-slate-950 bg-slate-950 shadow-inner"
+                  className="h-24 w-24 sm:h-32 sm:w-32 rounded-xl sm:rounded-2xl object-cover border-4 border-slate-950 bg-slate-950 shadow-inner"
                 />
               ) : (
-                <div className="h-28 w-28 sm:h-36 sm:w-36 rounded-2xl border-4 border-slate-950 bg-slate-900 flex items-center justify-center text-3xl sm:text-4xl font-black text-slate-300">
+                <div className="h-24 w-24 sm:h-32 sm:w-32 rounded-xl sm:rounded-2xl border-4 border-slate-950 bg-slate-900 flex items-center justify-center text-2xl sm:text-3xl font-black text-slate-300">
                   {profile.displayName ? profile.displayName.substring(0, 2).toUpperCase() : 'ME'}
                 </div>
               )}
@@ -301,7 +301,7 @@ export default function Profile() {
             <button
               type="button"
               onClick={() => avatarInputRef.current?.click()}
-              className="absolute -bottom-1 -right-1 z-20 bg-indigo-600 hover:bg-indigo-500 text-white p-2.5 sm:p-3 rounded-2xl border-2 border-slate-950 shadow-xl transition-transform hover:scale-110 active:scale-95 flex items-center justify-center cursor-pointer"
+              className="absolute -bottom-1 -right-1 z-20 bg-indigo-600 hover:bg-indigo-500 text-white p-2 sm:p-2.5 rounded-xl sm:rounded-2xl border-2 border-slate-950 shadow-xl transition-transform hover:scale-110 active:scale-95 flex items-center justify-center cursor-pointer"
               title="Change Profile Photo"
             >
               📷
@@ -309,18 +309,18 @@ export default function Profile() {
           </div>
 
           {/* Action Buttons */}
-          <div className="flex items-center gap-3 self-stretch sm:self-auto">
+          <div className="flex items-center gap-3 w-full sm:w-auto">
             {!isEditing ? (
               <button
                 onClick={() => setIsEditing(true)}
-                className="flex-1 sm:flex-initial px-6 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider bg-slate-900 hover:bg-slate-800 text-slate-100 transition-all border border-slate-800 shadow-lg active:scale-95 cursor-pointer font-mono"
+                className="w-full sm:w-auto px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider bg-slate-900 hover:bg-slate-800 text-slate-100 transition-all border border-slate-800 shadow-lg active:scale-95 cursor-pointer font-mono text-center"
               >
                 ✏️ Edit Profile
               </button>
             ) : (
               <button
                 onClick={() => setIsEditing(false)}
-                className="w-full sm:w-auto px-6 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider bg-rose-950/80 text-rose-300 hover:bg-rose-900/80 transition-all border border-rose-800/50 shadow-lg cursor-pointer font-mono"
+                className="w-full sm:w-auto px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider bg-rose-950/80 text-rose-300 hover:bg-rose-900/80 transition-all border border-rose-800/50 shadow-lg cursor-pointer font-mono text-center"
               >
                 ✕ Cancel
               </button>
@@ -331,7 +331,7 @@ export default function Profile() {
         {/* FEEDBACK ALERT */}
         {message.text && (
           <div
-            className={`mb-6 p-4 rounded-2xl text-xs font-semibold border backdrop-blur-xl transition-all duration-300 ${
+            className={`mb-6 p-3.5 sm:p-4 rounded-2xl text-xs font-semibold border backdrop-blur-xl transition-all duration-300 ${
               message.type === 'success'
                 ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
                 : 'border-rose-500/30 bg-rose-500/10 text-rose-400'
@@ -344,19 +344,19 @@ export default function Profile() {
         {/* SKELETON / CONTENT */}
         {loadingProfile ? (
           <div className="space-y-4 animate-pulse">
-            <div className="h-8 bg-slate-900 rounded-xl w-64"></div>
-            <div className="h-4 bg-slate-900 rounded-xl w-40"></div>
-            <div className="h-20 bg-slate-900 rounded-2xl w-full max-w-2xl"></div>
+            <div className="h-8 bg-slate-900 rounded-xl w-48 sm:w-64"></div>
+            <div className="h-4 bg-slate-900 rounded-xl w-32 sm:w-40"></div>
+            <div className="h-24 bg-slate-900 rounded-2xl w-full max-w-2xl"></div>
           </div>
         ) : !isEditing ? (
           /* DISPLAY MODE */
           <div className="space-y-6">
-            <div className="space-y-1">
-              <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white flex items-center gap-3">
+            <div className="space-y-1.5">
+              <h1 className="text-xl sm:text-2xl md:text-3xl font-black tracking-tight text-white flex items-center gap-2">
                 {profile.displayName || 'Unnamed Operator'}
               </h1>
               {profile.caption && (
-                <p className="text-xs text-indigo-400 font-mono italic">
+                <p className="text-xs text-indigo-400 font-mono italic break-words">
                   "{profile.caption}"
                 </p>
               )}
@@ -365,11 +365,11 @@ export default function Profile() {
               </p>
             </div>
 
-            <div className="p-5 rounded-2xl bg-slate-900/40 border border-slate-800/80 backdrop-blur-xl max-w-3xl">
+            <div className="p-4 sm:p-6 rounded-2xl bg-slate-900/40 border border-slate-800/80 backdrop-blur-xl max-w-3xl">
               <h3 className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 mb-2">
                 About / Biography
               </h3>
-              <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed whitespace-pre-line break-words">
                 {profile.bio || 'No profile biography specified yet. Click "Edit Profile" to introduce yourself.'}
               </p>
             </div>
@@ -378,11 +378,11 @@ export default function Profile() {
           /* EDIT FORM MODE */
           <form
             onSubmit={handleUpdateSubmit}
-            className="space-y-5 bg-slate-900/50 p-6 sm:p-8 rounded-3xl border border-slate-800/80 backdrop-blur-xl shadow-2xl max-w-3xl"
+            className="space-y-4 sm:space-y-5 bg-slate-900/50 p-4 sm:p-7 rounded-2xl sm:rounded-3xl border border-slate-800/80 backdrop-blur-xl shadow-2xl max-w-3xl"
           >
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
               <div>
-                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1.5 font-mono">
+                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">
                   Display Name
                 </label>
                 <input
@@ -391,12 +391,12 @@ export default function Profile() {
                   onChange={(e) => setProfile({ ...profile, displayName: e.target.value })}
                   required
                   placeholder="e.g. Commander Alice"
-                  className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-indigo-500 shadow-inner"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-indigo-500 shadow-inner"
                 />
               </div>
 
               <div>
-                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1.5 font-mono">
+                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">
                   Location
                 </label>
                 <input
@@ -404,13 +404,13 @@ export default function Profile() {
                   value={profile.location}
                   onChange={(e) => setProfile({ ...profile, location: e.target.value })}
                   placeholder="e.g. San Francisco, CA"
-                  className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-indigo-500 shadow-inner"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-indigo-500 shadow-inner"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1.5 font-mono">
+              <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">
                 Status Caption
               </label>
               <input
@@ -418,12 +418,12 @@ export default function Profile() {
                 value={profile.caption}
                 onChange={(e) => setProfile({ ...profile, caption: e.target.value })}
                 placeholder="e.g. Building distributed networks 🚀"
-                className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-indigo-500 shadow-inner"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-indigo-500 shadow-inner"
               />
             </div>
 
             <div>
-              <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1.5 font-mono">
+              <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">
                 Biography ({profile.bio.length}/500)
               </label>
               <textarea
@@ -432,14 +432,14 @@ export default function Profile() {
                 onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
                 rows={4}
                 placeholder="Write a brief overview about yourself..."
-                className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-indigo-500 resize-none shadow-inner"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white outline-none focus:border-indigo-500 resize-none shadow-inner"
               />
             </div>
 
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full py-3.5 rounded-2xl text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-lg shadow-indigo-500/25 transition-all cursor-pointer disabled:opacity-50"
+              className="w-full py-3 rounded-xl sm:rounded-2xl text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-lg shadow-indigo-500/25 transition-all cursor-pointer disabled:opacity-50 mt-2"
             >
               {isSubmitting ? 'Committing Changes...' : 'Save Profile Changes 💾'}
             </button>
@@ -449,19 +449,19 @@ export default function Profile() {
 
       {/* CROPPER MODAL */}
       {cropModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl sm:rounded-3xl max-w-sm sm:max-w-md w-full p-4 sm:p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-white font-mono">
+              <h4 className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-white font-mono">
                 Crop {uploadType === 'avatar' ? 'Profile Avatar' : 'Cover Banner'}
               </h4>
-              <button onClick={() => setCropModalOpen(false)} className="text-slate-400 hover:text-white text-xs cursor-pointer">
+              <button onClick={() => setCropModalOpen(false)} className="text-slate-400 hover:text-white text-xs cursor-pointer p-1">
                 ✕
               </button>
             </div>
 
             <div
-              className="relative overflow-hidden rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-center cursor-move touch-none shadow-inner select-none"
+              className="relative overflow-hidden rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center cursor-move touch-none shadow-inner select-none max-h-[220px] sm:max-h-[260px]"
               onMouseDown={(e) => handleStart(e.clientX, e.clientY)}
               onMouseMove={(e) => handleMove(e.clientX, e.clientY)}
               onMouseUp={handleEnd}
@@ -469,10 +469,10 @@ export default function Profile() {
               onTouchMove={(e) => handleMove(e.touches[0].clientX, e.touches[0].clientY)}
               onTouchEnd={handleEnd}
             >
-              <canvas ref={canvasRef} className="max-w-full max-h-[260px] object-contain pointer-events-none" />
+              <canvas ref={canvasRef} className="max-w-full max-h-full object-contain pointer-events-none" />
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <div className="flex justify-between text-[10px] font-mono text-slate-400">
                 <span>Scale Zoom</span>
                 <span>{zoom.toFixed(2)}x</span>
@@ -488,11 +488,11 @@ export default function Profile() {
               />
             </div>
 
-            <div className="flex justify-end gap-3 pt-2">
+            <div className="flex justify-end gap-2.5 pt-2">
               <button
                 type="button"
                 onClick={() => setCropModalOpen(false)}
-                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white bg-slate-800/60 cursor-pointer"
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white bg-slate-800/60 cursor-pointer"
               >
                 Cancel
               </button>
@@ -500,7 +500,7 @@ export default function Profile() {
                 type="button"
                 onClick={handleApplyCropAndUpload}
                 disabled={isUploadingMedia}
-                className="px-5 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-lg shadow-indigo-500/25 transition-all cursor-pointer disabled:opacity-50"
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-lg shadow-indigo-500/25 transition-all cursor-pointer disabled:opacity-50"
               >
                 {isUploadingMedia ? 'Uploading...' : 'Save & Upload 🚀'}
               </button>

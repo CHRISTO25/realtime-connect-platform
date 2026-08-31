@@ -1,22 +1,22 @@
 import React from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 const ProtectedRoute = ({ children }) => {
-  const { token } = useAuth();
+  const { token, userId } = useAuth();
   
-  // Read directly from the browser's local storage hardware synchronously
-  const hardwareToken = localStorage.getItem('access_token');
-  const userId = localStorage.getItem('user_id');
+  // Check auth state from context, fallback to localStorage synchronously
+  const activeToken = token || localStorage.getItem('access_token');
+  const activeUserId = userId || localStorage.getItem('user_id');
 
-  // Verify critical fields exist accurately
-  if (!token && (!hardwareToken || !userId)) {
-    console.log("Guard Blocked: No active token profile detected. Routing to gateway base.");
+  // If no token exists, route to login
+  if (!activeToken) {
+    console.warn("Guard Blocked: No active token detected. Redirecting to login.");
     return <Navigate to="/login" replace />;
   }
 
-  // Session verified! Let the dashboard mount safely.
-  return children;
+  // Render children if passed, otherwise fall back to React Router Outlet
+  return children ? children : <Outlet />;
 };
 
 export default ProtectedRoute;

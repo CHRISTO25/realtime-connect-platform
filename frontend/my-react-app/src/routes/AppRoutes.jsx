@@ -2,11 +2,11 @@ import React from "react";
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import Login from "../pages/Login";
 import Register from "../pages/Register";
-import VerifyEmail from "../pages/VerifyEmail"; // 👈 OTP Verification Page
+import VerifyEmail from "../pages/VerifyEmail";
 import Dashboard from "../pages/Dashboard";
-import AdminDashboard from "../pages/AdminDashboard"; // 👈 Admin Control Panel Component
+import AdminDashboard from "../pages/AdminDashboard";
 import ProtectedRoute from "./ProtectedRoute";
-import AdminRoute from "./AdminRoute"; // 👈 Role-Based Admin Guard
+import AdminRoute from "./AdminRoute";
 import Navbar from '../components/Navbar';
 import Profile from "../pages/Profile";
 import ChatDashboard from "../pages/ChatDashboard";
@@ -22,13 +22,15 @@ function PublicRoute({ children }) {
   return children;
 }
 
-// Layout wrapper that attaches the premium Navbar to standard views
+// ⚡ Dynamic layout wrapper ensuring full mobile viewport height and scrolling
 function DashboardLayout() {
   return (
-    <>
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col w-full overflow-x-hidden">
       <Navbar />
-      <Outlet />
-    </>
+      <main className="flex-1 w-full flex flex-col overflow-y-auto">
+        <Outlet />
+      </main>
+    </div>
   );
 }
 
@@ -41,7 +43,7 @@ function AppRoutes() {
         <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
         <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
         
-        {/* ⚡ OTP Email Confirmation Route */}
+        {/* OTP Email Confirmation Route */}
         <Route path="/verify-email" element={<VerifyEmail />} />
 
         {/* Protected Core User Dashboard Layout */}
@@ -49,9 +51,11 @@ function AppRoutes() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/chat-test" element={<ChatDashboard />} />
+          {/* Shorthand alias so /chat routes to the Chat view on mobile */}
+          <Route path="/chat" element={<Navigate to="/chat-test" replace />} />
         </Route>
 
-        {/* ⚡ Role-Protected Admin Panel Workspace */}
+        {/* Role-Protected Admin Panel Workspace */}
         <Route element={<AdminRoute><DashboardLayout /></AdminRoute>}>
           <Route path="/admin/dashboard" element={<AdminDashboard />} />
         </Route>
