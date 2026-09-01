@@ -15,7 +15,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
   const [callStatus, setCallStatus] = useState('IDLE'); // IDLE | RINGING_OUTGOING | RINGING_INCOMING | CONNECTED | DECLINED
-  const [incomingOffer, setIncomingOffer] = useState(null);
+  const [activeCallEnvelope, setActiveCallEnvelope] = useState(null); // { callType, sdp, callerId }
 
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
@@ -28,13 +28,17 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
   }, [recipientUserId]);
 
   const cleanupMedia = useCallback(() => {
+    try {
+      soundEffects.stopRingtone();
+    } catch (_) {}
+
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((t) => t.stop());
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
       setLocalStream(null);
     }
     if (remoteStreamRef.current) {
-      remoteStreamRef.current.getTracks().forEach((t) => t.stop());
+      remoteStreamRef.current.getTracks().forEach((track) => track.stop());
       remoteStreamRef.current = null;
       setRemoteStream(null);
     }
@@ -46,17 +50,12 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
       pcRef.current = null;
     }
     iceCandidatesQueue.current = [];
-    window.__activeLocalStream = null;
   }, []);
 
   const endCall = useCallback((notifyRemote = true, reason = 'CALL_END') => {
-    try {
-      soundEffects.stopRingtone();
-    } catch (_) {}
-
     cleanupMedia();
     setCallStatus(reason === 'DECLINED' ? 'DECLINED' : 'IDLE');
-    setIncomingOffer(null);
+    setActiveCallEnvelope(null);
 
     const target = activePeerIdRef.current;
     if (notifyRemote && target) {
@@ -68,6 +67,18 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
       });
     }
   }, [cleanupMedia, activeRoomId, sendMessage]);
+
+  const drainIceCandidates = async () => {
+    if (!pcRef.current || !pcRef.current.remoteDescription) return;
+    while (iceCandidatesQueue.current.length > 0) {
+      const candidate = iceCandidatesQueue.current.shift();
+      try {
+        await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.warn('⚠️ Buffered ICE candidate error:', e);
+      }
+    }
+  };
 
   const initPeerConnection = useCallback((targetId) => {
     if (pcRef.current) return pcRef.current;
@@ -86,6 +97,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
     };
 
     pc.ontrack = (event) => {
+      console.log('🟢 [WebRTC Track Received]:', event.track.kind);
       try {
         soundEffects.stopRingtone();
       } catch (_) {}
@@ -116,62 +128,62 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
     return pc;
   }, [activeRoomId, sendMessage, cleanupMedia]);
 
-  const drainIceCandidates = async () => {
-    if (!pcRef.current || !pcRef.current.remoteDescription) return;
-    while (iceCandidatesQueue.current.length > 0) {
-      const candidate = iceCandidatesQueue.current.shift();
-      try {
-        await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (e) {
-        console.warn('ICE candidate buffering warning:', e);
-      }
-    }
-  };
-
-  const startCall = async (stream, callType = 'audio') => {
+  // 1️⃣ Outgoing Call Trigger
+  const startCall = async (targetId, callType = 'audio') => {
     cleanupMedia();
-    localStreamRef.current = stream;
-    setLocalStream(stream);
-
-    const target = activePeerIdRef.current;
-    const pc = initPeerConnection(target);
-
-    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+    activePeerIdRef.current = targetId;
 
     try {
+      const isVideo = callType === 'video';
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: isVideo ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } : false,
+      });
+
+      localStreamRef.current = stream;
+      setLocalStream(stream);
+
+      const pc = initPeerConnection(targetId);
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
-        offerToReceiveVideo: callType === 'video',
+        offerToReceiveVideo: isVideo,
       });
       await pc.setLocalDescription(offer);
 
+      setActiveCallEnvelope({ callType, sdp: offer, callerId: currentUserId });
       setCallStatus('RINGING_OUTGOING');
       try {
         soundEffects.playRingbackTone();
       } catch (_) {}
 
-      const envelope = {
-        callType: callType,
-        sdp: offer,
-      };
-
       sendMessage({
         type: 'CALL_OFFER',
         room_id: activeRoomId,
-        target_id: target,
-        content: JSON.stringify(envelope),
+        target_id: targetId,
+        content: JSON.stringify({
+          callType,
+          sdp: offer,
+        }),
       });
     } catch (err) {
-      console.error('Failed to create call offer:', err);
-      endCall(false);
+      console.error('❌ Failed to start call:', err);
+      alert(`Could not access media devices: ${err.message}`);
+      cleanupMedia();
+      setCallStatus('IDLE');
     }
   };
 
-  const acceptIncomingCall = async (isVideo) => {
-    if (!incomingOffer) return;
+  // 2️⃣ Incoming Call Accept Trigger
+  const acceptIncomingCall = async () => {
+    if (!activeCallEnvelope) return;
     try {
       soundEffects.stopRingtone();
     } catch (_) {}
+
+    const isVideo = activeCallEnvelope.callType === 'video';
+    const targetId = activeCallEnvelope.callerId || activePeerIdRef.current;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -182,12 +194,10 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
       localStreamRef.current = stream;
       setLocalStream(stream);
 
-      const target = activePeerIdRef.current;
-      const pc = initPeerConnection(target);
-
+      const pc = initPeerConnection(targetId);
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
-      const offerSdp = incomingOffer.sdp || incomingOffer;
+      const offerSdp = activeCallEnvelope.sdp || activeCallEnvelope;
       await pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
       await drainIceCandidates();
 
@@ -198,21 +208,22 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
       sendMessage({
         type: 'CALL_ANSWER',
         room_id: activeRoomId,
-        target_id: target,
+        target_id: targetId,
         content: JSON.stringify(answer),
       });
     } catch (err) {
-      console.error('Failed to accept incoming call:', err);
+      console.error('❌ Failed to accept call:', err);
       endCall(false);
     }
   };
 
+  // 3️⃣ Decline Incoming Call
   const declineIncomingCall = () => {
     try {
       soundEffects.stopRingtone();
     } catch (_) {}
     setCallStatus('DECLINED');
-    const target = activePeerIdRef.current;
+    const target = activeCallEnvelope?.callerId || activePeerIdRef.current;
     sendMessage({
       type: 'CALL_DECLINED',
       room_id: activeRoomId,
@@ -222,6 +233,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
     endCall(false, 'DECLINED');
   };
 
+  // 4️⃣ WebSocket Signaling Processor
   useEffect(() => {
     if (!wsMessages || wsMessages.length === 0) return;
     const latest = wsMessages[wsMessages.length - 1];
@@ -238,14 +250,10 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
         } catch {
           envelope = { callType: 'audio', sdp: latest.content };
         }
-        
-        // If caller initiated via window.__activeLocalStream
-        if (envelope.initiator && window.__activeLocalStream) {
-          startCall(window.__activeLocalStream, envelope.callType || 'audio');
-          return;
-        }
 
-        setIncomingOffer(envelope);
+        envelope.callerId = senderId;
+        activePeerIdRef.current = senderId;
+        setActiveCallEnvelope(envelope);
         setCallStatus('RINGING_INCOMING');
         try {
           soundEffects.playRingbackTone();
@@ -257,7 +265,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
 
         const pc = initPeerConnection(senderId);
         const answer = typeof latest.content === 'string' ? JSON.parse(latest.content) : latest.content;
-        
+
         if (pc.signalingState !== 'stable') {
           await pc.setRemoteDescription(new RTCSessionDescription(answer));
           await drainIceCandidates();
@@ -266,12 +274,12 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
       } else if (latest.type === 'ICE_CANDIDATE') {
         const candidateData = typeof latest.content === 'string' ? JSON.parse(latest.content) : latest.content;
         const pc = pcRef.current;
-        
+
         if (pc && pc.remoteDescription && pc.remoteDescription.type) {
           try {
             await pc.addIceCandidate(new RTCIceCandidate(candidateData));
           } catch (e) {
-            console.warn('Error applying ICE candidate:', e);
+            console.warn('ICE candidate addition error:', e);
           }
         } else {
           iceCandidatesQueue.current.push(candidateData);
@@ -296,7 +304,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
     localStream,
     remoteStream,
     callStatus,
-    incomingOffer,
+    activeCallEnvelope,
     startCall,
     acceptIncomingCall,
     declineIncomingCall,

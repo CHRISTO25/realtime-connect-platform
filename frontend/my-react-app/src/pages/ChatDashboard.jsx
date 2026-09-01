@@ -291,59 +291,35 @@ export default function ChatDashboard() {
   }, [previewUrl]);
 
   // Voice Call Trigger (Caller)
-  const handleInitiateAudioCall = async () => {
+  // Updated header buttons inside ChatDashboard.jsx
+  const handleInitiateAudioCall = () => {
     if (!recipientId) return alert("Select a direct friend to initiate a voice call.");
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: false,
-      });
-
-      // Send offer payload through WebSocket
-      sendMessage({
-        type: 'CALL_OFFER',
-        room_id: activeTarget.id,
-        target_id: recipientId,
-        content: JSON.stringify({
-          callType: 'audio',
-          initiator: true
-        })
-      });
-
-      // Let GlobalCallHandler manage the ongoing session
-      window.__activeLocalStream = stream;
-    } catch (err) {
-      console.error("Microphone access denied:", err);
-      alert("Microphone permissions required for voice calls.");
-    }
+    
+    // Broadcast trigger over socket to GlobalCallHandler
+    sendMessage({
+      type: 'CALL_OFFER',
+      room_id: activeTarget.id,
+      target_id: recipientId,
+      content: JSON.stringify({
+        callType: 'audio',
+        initiator: true
+      })
+    });
   };
 
-  // Video Call Trigger (Caller)
-  const handleInitiateVideoCall = async () => {
+  const handleInitiateVideoCall = () => {
     if (!recipientId) return alert("Select a direct friend to initiate a video call.");
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" } 
-      });
-
-      sendMessage({
-        type: 'CALL_OFFER',
-        room_id: activeTarget.id,
-        target_id: recipientId,
-        content: JSON.stringify({
-          callType: 'video',
-          initiator: true
-        })
-      });
-
-      window.__activeLocalStream = stream;
-    } catch (err) {
-      console.error("Camera Permission Error:", err);
-      alert("Camera & Microphone permissions required for video calls.");
-    }
+    
+    sendMessage({
+      type: 'CALL_OFFER',
+      room_id: activeTarget.id,
+      target_id: recipientId,
+      content: JSON.stringify({
+        callType: 'video',
+        initiator: true
+      })
+    });
   };
-
 
   const handleCreateGroupSubmit = async (e) => {
     e.preventDefault();
