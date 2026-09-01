@@ -7,15 +7,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/tls"
+	//"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"math/big"
-	"net"
+	//"net"
 	"net/http"
-	"net/smtp"
+	//"net/smtp"
 	"os"
 	"shared/jwt"
 	"strings"
@@ -103,106 +103,64 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req dto.RegisterRequest)
 
 // Helper: Send OTP via Gmail SMTP with direct TLS fallback and explicit error logging
 // Helper: Send OTP via Gmail SMTP with explicit STARTTLS on port 587
+// Helper: Send OTP via Resend HTTPS API (Bypasses Render SMTP port blocks)
 func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
-	smtpHost := strings.TrimSpace(os.Getenv("SMTP_HOST"))
-	smtpPort := strings.TrimSpace(os.Getenv("SMTP_PORT"))
-	smtpUser := strings.TrimSpace(os.Getenv("SMTP_USER"))
-	smtpPass := strings.TrimSpace(os.Getenv("SMTP_PASS"))
-	smtpFrom := strings.TrimSpace(os.Getenv("SMTP_FROM"))
+	resendAPIKey := strings.TrimSpace(os.Getenv("RESEND_API_KEY"))
+	fromEmail := strings.TrimSpace(os.Getenv("SMTP_FROM"))
 
-	// Strip whitespace and quotes from environment variables
-	smtpPass = strings.ReplaceAll(smtpPass, " ", "")
-	smtpPass = strings.Trim(smtpPass, `"'`)
-
-	if smtpHost == "" {
-		smtpHost = "smtp.gmail.com"
-	}
-	if smtpPort == "" {
-		smtpPort = "587"
-	}
-	if smtpFrom == "" {
-		smtpFrom = smtpUser
+	if fromEmail == "" {
+		// Use Resend's default verified testing sender if custom domain is not set
+		fromEmail = "onboarding@resend.dev"
 	}
 
-	if smtpUser == "" || smtpPass == "" {
-		log.Printf("🔴 [SMTP ERROR] Missing credentials: SMTP_USER='%s', is SMTP_PASS set? %v", smtpUser, smtpPass != "")
+	if resendAPIKey == "" {
+		log.Printf("🔴 [EMAIL ERROR] Missing RESEND_API_KEY! Add it to your Render environment variables.")
 		return
 	}
 
-	addr := fmt.Sprintf("%s:%s", smtpHost, smtpPort)
-	log.Printf("⚡ [SMTP INFO] Connecting to %s via STARTTLS to send OTP to %s...", addr, toEmail)
+	log.Printf("⚡ [EMAIL INFO] Dispatching OTP to %s via Resend HTTPS API...", toEmail)
 
-	// RFC-compliant mail payload
-	subject := "Subject: Chatting App Verification Code\r\n"
-	fromHeader := fmt.Sprintf("From: %s\r\n", smtpFrom)
-	toHeader := fmt.Sprintf("To: %s\r\n", toEmail)
-	mime := "MIME-version: 1.0;\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n"
-	body := fmt.Sprintf("Hello,\r\n\r\nYour account activation code is: %s\r\nThis code will expire in 10 minutes.\r\n\r\nRegards,\r\nChatting App Support", otp)
+	payload := map[string]interface{}{
+		"from":    fromEmail,
+		"to":      []string{toEmail},
+		"subject": "Chatting App Verification Code",
+		"html": fmt.Sprintf(
+			"<p>Hello,</p><p>Your account activation code is: <strong>%s</strong></p><p>This code will expire in 10 minutes.</p><p>Regards,<br>Chatting App Support</p>",
+			otp,
+		),
+	}
 
-	msg := []byte(fromHeader + toHeader + subject + mime + body)
-	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
-
-	// 1. Establish plain TCP connection first (Port 587)
-	conn, err := net.DialTimeout("tcp", addr, 15*time.Second)
+	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("🔴 [SMTP ERROR] TCP Dial to %s failed: %v", addr, err)
+		log.Printf("🔴 [EMAIL ERROR] Failed to encode email payload: %v", err)
 		return
 	}
-	defer conn.Close()
 
-	// 2. Initialize SMTP Client
-	client, err := smtp.NewClient(conn, smtpHost)
+	req, err := http.NewRequest("POST", "https://api.resend.com/emails", bytes.NewBuffer(jsonBytes))
 	if err != nil {
-		log.Printf("🔴 [SMTP ERROR] SMTP client creation failed: %v", err)
-		return
-	}
-	defer client.Quit()
-
-	// 3. Upgrade to TLS via STARTTLS
-	tlsConfig := &tls.Config{
-		ServerName: smtpHost,
-	}
-	if ok, _ := client.Extension("STARTTLS"); ok {
-		if err = client.StartTLS(tlsConfig); err != nil {
-			log.Printf("🔴 [SMTP ERROR] STARTTLS upgrade failed: %v", err)
-			return
-		}
-	}
-
-	// 4. Authenticate
-	if err = client.Auth(auth); err != nil {
-		log.Printf("🔴 [SMTP ERROR] Auth failed: %v (Check Google App Password)", err)
+		log.Printf("🔴 [EMAIL ERROR] Failed to create HTTP request: %v", err)
 		return
 	}
 
-	// 5. Set sender and recipient
-	if err = client.Mail(smtpFrom); err != nil {
-		log.Printf("🔴 [SMTP ERROR] Mail sender set failed: %v", err)
-		return
-	}
-	if err = client.Rcpt(toEmail); err != nil {
-		log.Printf("🔴 [SMTP ERROR] Recipient set failed: %v", err)
-		return
-	}
+	req.Header.Set("Authorization", "Bearer "+resendAPIKey)
+	req.Header.Set("Content-Type", "application/json")
 
-	// 6. Write message body
-	w, err := client.Data()
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("🔴 [SMTP ERROR] Data stream open failed: %v", err)
+		log.Printf("🔴 [EMAIL ERROR] HTTPS request failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		var errResp map[string]interface{}
+		_ = json.NewDecoder(resp.Body).Decode(&errResp)
+		log.Printf("🔴 [EMAIL ERROR] Resend returned status %d: %v", resp.StatusCode, errResp)
 		return
 	}
 
-	if _, err = w.Write(msg); err != nil {
-		log.Printf("🔴 [SMTP ERROR] Data write failed: %v", err)
-		return
-	}
-
-	if err = w.Close(); err != nil {
-		log.Printf("🔴 [SMTP ERROR] Data close failed: %v", err)
-		return
-	}
-
-	log.Printf("🟢 [SMTP SUCCESS] Verification OTP sent successfully to %s", toEmail)
+	log.Printf("🟢 [EMAIL SUCCESS] Verification OTP delivered to %s via HTTPS", toEmail)
 }
 
 // 2️⃣ Step 2: Verify OTP, commit user to Postgres, and initialize user-service profile
