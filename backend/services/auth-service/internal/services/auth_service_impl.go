@@ -102,6 +102,7 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req dto.RegisterRequest)
 }
 
 // Helper: Send OTP via Gmail SMTP with direct TLS fallback and explicit error logging
+// Helper: Send OTP via Gmail SMTP with explicit STARTTLS on port 587
 func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
 	smtpHost := strings.TrimSpace(os.Getenv("SMTP_HOST"))
 	smtpPort := strings.TrimSpace(os.Getenv("SMTP_PORT"))
@@ -109,7 +110,7 @@ func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
 	smtpPass := strings.TrimSpace(os.Getenv("SMTP_PASS"))
 	smtpFrom := strings.TrimSpace(os.Getenv("SMTP_FROM"))
 
-	// Strip whitespace and quotes often introduced in .env configurations
+	// Strip whitespace and quotes from environment variables
 	smtpPass = strings.ReplaceAll(smtpPass, " ", "")
 	smtpPass = strings.Trim(smtpPass, `"'`)
 
@@ -117,7 +118,7 @@ func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
 		smtpHost = "smtp.gmail.com"
 	}
 	if smtpPort == "" {
-		smtpPort = "465"
+		smtpPort = "587"
 	}
 	if smtpFrom == "" {
 		smtpFrom = smtpUser
@@ -129,9 +130,9 @@ func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
 	}
 
 	addr := fmt.Sprintf("%s:%s", smtpHost, smtpPort)
-	log.Printf("⚡ [SMTP INFO] Attempting to deliver OTP to %s via %s (Sender: %s)...", toEmail, addr, smtpFrom)
+	log.Printf("⚡ [SMTP INFO] Connecting to %s via STARTTLS to send OTP to %s...", addr, toEmail)
 
-	// RFC-compliant mail structure
+	// RFC-compliant mail payload
 	subject := "Subject: Chatting App Verification Code\r\n"
 	fromHeader := fmt.Sprintf("From: %s\r\n", smtpFrom)
 	toHeader := fmt.Sprintf("To: %s\r\n", toEmail)
@@ -141,68 +142,67 @@ func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
 	msg := []byte(fromHeader + toHeader + subject + mime + body)
 	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
 
-	var err error
-	if smtpPort == "465" {
-		// 1. Direct SSL/TLS Handshake for Port 465 (Recommended for Render)
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: false,
-			ServerName:         smtpHost,
-		}
-
-		conn, dialErr := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr, tlsConfig)
-		if dialErr != nil {
-			log.Printf("🔴 [SMTP ERROR] Direct TLS connection to %s failed: %v", addr, dialErr)
-			return
-		}
-		defer conn.Close()
-
-		client, clientErr := smtp.NewClient(conn, smtpHost)
-		if clientErr != nil {
-			log.Printf("🔴 [SMTP ERROR] SMTP client creation failed: %v", clientErr)
-			return
-		}
-		defer client.Quit()
-
-		if err = client.Auth(auth); err != nil {
-			log.Printf("🔴 [SMTP ERROR] Authentication rejected for %s: %v (Verify Google App Password)", smtpUser, err)
-			return
-		}
-
-		if err = client.Mail(smtpFrom); err != nil {
-			log.Printf("🔴 [SMTP ERROR] Sender declaration failed (%s): %v", smtpFrom, err)
-			return
-		}
-
-		if err = client.Rcpt(toEmail); err != nil {
-			log.Printf("🔴 [SMTP ERROR] Recipient declaration failed (%s): %v", toEmail, err)
-			return
-		}
-
-		w, dataErr := client.Data()
-		if dataErr != nil {
-			log.Printf("🔴 [SMTP ERROR] Data stream opening failed: %v", dataErr)
-			return
-		}
-
-		if _, err = w.Write(msg); err != nil {
-			log.Printf("🔴 [SMTP ERROR] Writing mail payload failed: %v", err)
-			return
-		}
-
-		if err = w.Close(); err != nil {
-			log.Printf("🔴 [SMTP ERROR] Data stream closure failed: %v", err)
-			return
-		}
-	} else {
-		// 2. Standard STARTTLS on Port 587
-		err = smtp.SendMail(addr, auth, smtpFrom, []string{toEmail}, msg)
-	}
-
+	// 1. Establish plain TCP connection first (Port 587)
+	conn, err := net.DialTimeout("tcp", addr, 15*time.Second)
 	if err != nil {
-		log.Printf("🔴 [SMTP ERROR] Delivery failed to %s: %v", toEmail, err)
-	} else {
-		log.Printf("🟢 [SMTP SUCCESS] Verification OTP sent successfully to %s", toEmail)
+		log.Printf("🔴 [SMTP ERROR] TCP Dial to %s failed: %v", addr, err)
+		return
 	}
+	defer conn.Close()
+
+	// 2. Initialize SMTP Client
+	client, err := smtp.NewClient(conn, smtpHost)
+	if err != nil {
+		log.Printf("🔴 [SMTP ERROR] SMTP client creation failed: %v", err)
+		return
+	}
+	defer client.Quit()
+
+	// 3. Upgrade to TLS via STARTTLS
+	tlsConfig := &tls.Config{
+		ServerName: smtpHost,
+	}
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		if err = client.StartTLS(tlsConfig); err != nil {
+			log.Printf("🔴 [SMTP ERROR] STARTTLS upgrade failed: %v", err)
+			return
+		}
+	}
+
+	// 4. Authenticate
+	if err = client.Auth(auth); err != nil {
+		log.Printf("🔴 [SMTP ERROR] Auth failed: %v (Check Google App Password)", err)
+		return
+	}
+
+	// 5. Set sender and recipient
+	if err = client.Mail(smtpFrom); err != nil {
+		log.Printf("🔴 [SMTP ERROR] Mail sender set failed: %v", err)
+		return
+	}
+	if err = client.Rcpt(toEmail); err != nil {
+		log.Printf("🔴 [SMTP ERROR] Recipient set failed: %v", err)
+		return
+	}
+
+	// 6. Write message body
+	w, err := client.Data()
+	if err != nil {
+		log.Printf("🔴 [SMTP ERROR] Data stream open failed: %v", err)
+		return
+	}
+
+	if _, err = w.Write(msg); err != nil {
+		log.Printf("🔴 [SMTP ERROR] Data write failed: %v", err)
+		return
+	}
+
+	if err = w.Close(); err != nil {
+		log.Printf("🔴 [SMTP ERROR] Data close failed: %v", err)
+		return
+	}
+
+	log.Printf("🟢 [SMTP SUCCESS] Verification OTP sent successfully to %s", toEmail)
 }
 
 // 2️⃣ Step 2: Verify OTP, commit user to Postgres, and initialize user-service profile
