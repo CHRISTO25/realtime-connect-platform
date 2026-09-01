@@ -21,7 +21,7 @@ function generateValidRoomUUID(userId1, userId2) {
 }
 
 export default function ChatDashboard() {
-  const { isConnected, connectionStatus, messages: wsMessages, sendMessage } = useWebSocket();
+  const { isConnected, connectionStatus, messages: wsMessages, sendMessage, incomingCall, setIncomingCall } = useWebSocket();
 
   const {
     activeTarget,
@@ -38,7 +38,7 @@ export default function ChatDashboard() {
     setTypingStatus,
   } = useChatStore();
 
-  // ⚡ Robust User ID resolution: LocalStorage -> Fallback JWT decoding
+  // Robust User ID resolution: LocalStorage -> Fallback JWT decoding
   const currentUserId = useMemo(() => {
     const localId = localStorage.getItem('user_id');
     if (localId && localId !== 'undefined' && localId !== 'null') return localId;
@@ -88,14 +88,17 @@ export default function ChatDashboard() {
 
   const currentRoomMessages = useMemo(() => messagesByRoom[activeTarget.id] || [], [messagesByRoom, activeTarget.id]);
   const isCurrentRoomTyping = typingStatusByRoom[activeTarget.id] || false;
-  const recipientId = activeTarget.friendId || null;
+  const recipientId = activeTarget.friendId || (incomingCall ? incomingCall.callerId : null);
 
-  // WebRTC Hook
+  // WebRTC Hook Integration
   const { 
     localStream, 
     remoteStream, 
     callStatus, 
+    incomingOffer,
     startCall, 
+    acceptIncomingCall,
+    declineIncomingCall,
     endCall 
   } = useWebRTC(
     activeTarget.id,
@@ -105,8 +108,17 @@ export default function ChatDashboard() {
     wsMessages
   );
 
-  const isAudioActive = activeCallType === 'audio' && (callStatus === 'RINGING_OUTGOING' || callStatus === 'CONNECTED');
-  const isVideoActive = activeCallType === 'video' && (callStatus === 'RINGING_OUTGOING' || callStatus === 'CONNECTED');
+  // Synchronize incoming call envelope type with active modal state
+  useEffect(() => {
+    if (incomingOffer && incomingOffer.callType) {
+      setActiveCallType(incomingOffer.callType);
+    }
+  }, [incomingOffer]);
+
+  // Modal display condition covering OUTGOING, INCOMING, and ACTIVE calls
+  const isCallInProgress = callStatus === 'RINGING_OUTGOING' || callStatus === 'RINGING_INCOMING' || callStatus === 'CONNECTED';
+  const isAudioActive = activeCallType === 'audio' && isCallInProgress;
+  const isVideoActive = activeCallType === 'video' && isCallInProgress;
 
   // Background Data Sync
   const syncData = useCallback(async () => {
@@ -243,8 +255,13 @@ export default function ChatDashboard() {
         break;
       }
       case 'CALL_OFFER': {
-        if (latestFrame.room_id === activeTarget.id && String(latestFrame.sender_id) !== String(currentUserId)) {
-          setActiveCallType(latestFrame.content?.includes('video') ? 'video' : 'audio');
+        if (String(latestFrame.sender_id) !== String(currentUserId)) {
+          try {
+            const parsed = typeof latestFrame.content === 'string' ? JSON.parse(latestFrame.content) : latestFrame.content;
+            setActiveCallType(parsed.callType === 'video' ? 'video' : 'audio');
+          } catch {
+            setActiveCallType('audio');
+          }
         }
         break;
       }
@@ -273,10 +290,14 @@ export default function ChatDashboard() {
     setUploadProgress(0);
   }, [previewUrl]);
 
+  // Voice Call Trigger (Caller)
   const handleInitiateAudioCall = async () => {
     if (!recipientId) return alert("Select a direct friend to initiate a voice call.");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false,
+      });
       setActiveCallType('audio');
       await startCall(stream, 'audio');
     } catch (err) {
@@ -285,11 +306,12 @@ export default function ChatDashboard() {
     }
   };
 
+  // Video Call Trigger (Caller)
   const handleInitiateVideoCall = async () => {
     if (!recipientId) return alert("Select a direct friend to initiate a video call.");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: true, 
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" } 
       });
       setActiveCallType('video');
@@ -474,7 +496,7 @@ export default function ChatDashboard() {
         </div>
       )}
 
-      {/* ACTIVE FRIENDS BAR (Visible only when not in full mobile chat view) */}
+      {/* ACTIVE FRIENDS BAR */}
       <div className={`w-full shrink-0 ${mobileShowChat ? 'hidden sm:block' : 'block'}`}>
         <ActiveFriendsBar friends={friends} onSelectFriend={selectFriendChat} />
       </div>
@@ -807,27 +829,28 @@ export default function ChatDashboard() {
 
       </main>
 
-      {/* CALL MODALS */}
+      {/* AUDIO CALL MODAL */}
       <AudioCallModal 
         isOpen={isAudioActive}
         onClose={() => endCall(true)}
-        callerName={activeTarget.name}
+        callerName={activeTarget.name || "Voice Call"}
         callStatus={callStatus}
         localStream={localStream}
         remoteStream={remoteStream}
-        onAccept={null}
-        onReject={() => endCall(true)}
+        onAccept={callStatus === 'RINGING_INCOMING' ? () => acceptIncomingCall(false) : null}
+        onReject={declineIncomingCall}
       />
 
+      {/* VIDEO CALL MODAL */}
       <VideoCallModal 
         isOpen={isVideoActive}
         onClose={() => endCall(true)}
-        callerName={activeTarget.name}
+        callerName={activeTarget.name || "Video Call"}
         callStatus={callStatus}
         localStream={localStream}
         remoteStream={remoteStream}
-        onAccept={null}
-        onReject={() => endCall(true)}
+        onAccept={callStatus === 'RINGING_INCOMING' ? () => acceptIncomingCall(true) : null}
+        onReject={declineIncomingCall}
       />
 
     </div>
