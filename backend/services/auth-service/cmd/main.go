@@ -8,11 +8,13 @@ import (
 	"auth-service/internal/routes"
 	"auth-service/internal/services"
 	"context"
+	"crypto/tls"
 	"log"
 	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	shareddb "shared/database"
@@ -21,7 +23,10 @@ import (
 )
 
 func main() {
-	// ⚡ 1. Initialize Zap Structured JSON Logger
+	// ⚡ 0. Load .env file if present
+	_ = godotenv.Load()
+
+	// 1. Initialize Zap Structured JSON Logger
 	logger.InitLogger()
 	defer logger.Log.Sync()
 
@@ -41,7 +46,7 @@ func main() {
 	}
 	log.Println("Database table migrations verified and completed successfully")
 
-	// ⚡ 5. Initialize Redis Client (Check REDIS_URL first for Upstash TLS)
+	// ⚡ 5. Initialize Redis Client with explicit TLS for Upstash
 	redisTarget := os.Getenv("REDIS_URL")
 	if redisTarget == "" {
 		redisTarget = cfg.RedisAddr
@@ -51,27 +56,25 @@ func main() {
 	if strings.HasPrefix(redisTarget, "redis://") || strings.HasPrefix(redisTarget, "rediss://") {
 		opt, err := redis.ParseURL(redisTarget)
 		if err != nil {
-			log.Printf("⚠️ Failed to parse Redis connection URI: %v", err)
-			redisClient = redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+			log.Printf("⚠️ Failed to parse Redis URI: %v", err)
 		} else {
+			if strings.HasPrefix(redisTarget, "rediss://") {
+				opt.TLSConfig = &tls.Config{
+					MinVersion: tls.VersionTLS12,
+				}
+			}
 			redisClient = redis.NewClient(opt)
 		}
-	} else if redisTarget != "" && redisTarget != "localhost:6379" && redisTarget != "redis:6379" {
-		redisClient = redis.NewClient(&redis.Options{
-			Addr:     redisTarget,
-			Password: "",
-			DB:       0,
-		})
-	} else {
-		redisClient = redis.NewClient(&redis.Options{
-			Addr: "localhost:6379",
-		})
+	}
+
+	if redisClient == nil {
+		redisClient = redis.NewClient(&redis.Options{Addr: "localhost:6379"})
 	}
 
 	if err := redisClient.Ping(context.Background()).Err(); err != nil {
-		log.Printf("⚠️ Warning: Redis session cache connection failed: %v. Continuing without cache fallback.", err)
+		log.Printf("🔴 [Redis Error] Session cache ping failed: %v", err)
 	} else {
-		log.Println("✅ Redis session cache connected successfully for OTP staging")
+		log.Println("🟢 [Redis Success] Upstash cache connected and verified")
 	}
 
 	// 6. Initialize Data Architecture Layers
@@ -82,12 +85,11 @@ func main() {
 	// 7. Initialize Gin Web Framework Engine
 	router := gin.New()
 
-	// ⚡ 8. Register Middlewares
+	// 8. Register Middlewares
 	router.Use(gin.Recovery())
 	router.Use(logger.ZapLoggerMiddleware())
 	router.Use(middleware.PrometheusMiddleware("auth-service"))
 
-	// CORS Configuration
 	router.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
@@ -102,13 +104,13 @@ func main() {
 		c.Next()
 	})
 
-	// ⚡ 9. Expose Standard Prometheus Metrics Scraper Endpoint
+	// 9. Metrics Endpoint
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// 10. Bind routes
 	routes.SetupRoutes(router, authHandler, db)
 
-	// 11. Determine Port (Render injects PORT)
+	// 11. Determine Port
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = cfg.AppPort
@@ -117,8 +119,8 @@ func main() {
 		port = "8001"
 	}
 
-	log.Printf("🚀 %s initialized successfully with Zap & Prometheus, listening on port :%s", cfg.AppName, port)
+	log.Printf("🚀 %s listening on port :%s", cfg.AppName, port)
 	if err := router.Run(":" + port); err != nil {
-		log.Fatalf("Failed to spin up the web routing cluster service listener: %v", err)
+		log.Fatalf("Server crash: %v", err)
 	}
 }
