@@ -7,15 +7,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	//"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"math/big"
-	//"net"
 	"net/http"
-	//"net/smtp"
+	"net/url"
 	"os"
 	"shared/jwt"
 	"strings"
@@ -26,10 +24,12 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-var ErrEmailAlreadyExists = errors.New("email already registered")
-var ErrInvalidCredentials = errors.New("invalid email or password")
-var ErrUserBanned = errors.New("access denied: your account has been suspended by an administrator")
-var ErrInvalidOTP = errors.New("invalid or expired verification code")
+var (
+	ErrEmailAlreadyExists = errors.New("email already registered")
+	ErrInvalidCredentials = errors.New("invalid email or password")
+	ErrUserBanned         = errors.New("access denied: your account has been suspended by an administrator")
+	ErrInvalidOTP         = errors.New("invalid or expired verification code")
+)
 
 type AuthServiceImpl struct {
 	userRepo    repositories.UserRepository
@@ -52,7 +52,7 @@ type StagedUser struct {
 	HashedPassword string `json:"hashed_password"`
 }
 
-// 1️⃣ Step 1: Register stages user data in Redis and triggers Gmail SMTP OTP (No Database Write Yet)
+// 1️⃣ Step 1: Register stages user data in Redis and triggers Google Apps Script HTTPS Relay OTP
 func (s *AuthServiceImpl) Register(ctx context.Context, req dto.RegisterRequest) error {
 	existingUser, err := s.userRepo.FindByEmail(ctx, req.Email)
 	if err != nil {
@@ -95,80 +95,53 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req dto.RegisterRequest)
 		}
 	}
 
-	// Dispatch SMTP email in background routine
+	// Dispatch email in background routine via Google Apps Script HTTPS Relay
 	go s.sendOTPEmail(req.Email, otpCode)
 
 	return nil
 }
 
-// Helper: Send OTP via Gmail SMTP with direct TLS fallback and explicit error logging
-// Helper: Send OTP via Brevo HTTPS REST API (100% Free - Sends to any email address)
+// Helper: Send OTP via Google Apps Script HTTPS Relay (Sends to any recipient without domain restriction)
 func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
-	brevoAPIKey := strings.TrimSpace(os.Getenv("BREVO_API_KEY"))
-	fromEmail := strings.TrimSpace(os.Getenv("BREVO_SENDER_EMAIL"))
-	fromName := strings.TrimSpace(os.Getenv("BREVO_SENDER_NAME"))
+	scriptURL := strings.TrimSpace(os.Getenv("GMAIL_RELAY_URL"))
+	relayKey := strings.TrimSpace(os.Getenv("GMAIL_RELAY_KEY"))
 
-	if fromName == "" {
-		fromName = "Chatting App Support"
-	}
-	if fromEmail == "" {
-		fromEmail = "christovarghese555@gmail.com"
+	if relayKey == "" {
+		relayKey = "my_secure_email_secret_12345"
 	}
 
-	if brevoAPIKey == "" {
-		log.Printf("🔴 [EMAIL ERROR] Missing BREVO_API_KEY in environment variables")
+	if scriptURL == "" {
+		log.Printf("🔴 [EMAIL ERROR] Missing GMAIL_RELAY_URL in environment variables")
 		return
 	}
 
-	log.Printf("⚡ [EMAIL INFO] Dispatching OTP to %s via Brevo HTTPS API...", toEmail)
+	endpoint := fmt.Sprintf("%s?to=%s&otp=%s&key=%s",
+		scriptURL,
+		url.QueryEscape(toEmail),
+		url.QueryEscape(otp),
+		url.QueryEscape(relayKey),
+	)
 
-	payload := map[string]interface{}{
-		"sender": map[string]string{
-			"name":  fromName,
-			"email": fromEmail,
-		},
-		"to": []map[string]string{
-			{"email": toEmail},
-		},
-		"subject": "Chatting App Account Verification Code",
-		"htmlContent": fmt.Sprintf(
-			"<h3>Account Verification</h3><p>Hello,</p><p>Your account activation code is: <strong style='font-size: 18px; color: #2563eb;'>%s</strong></p><p>This code will expire in 10 minutes.</p><br/><p>Regards,<br>Chatting App Team</p>",
-			otp,
-		),
+	log.Printf("⚡ [EMAIL INFO] Dispatching OTP to %s via Google Script Relay...", toEmail)
+
+	// Google Apps Script uses 302 redirects upon execution; http.Client automatically handles this
+	client := &http.Client{
+		Timeout: 20 * time.Second,
 	}
 
-	jsonBytes, err := json.Marshal(payload)
+	resp, err := client.Get(endpoint)
 	if err != nil {
-		log.Printf("🔴 [EMAIL ERROR] Failed to encode JSON payload: %v", err)
-		return
-	}
-
-	req, err := http.NewRequest("POST", "https://api.brevo.com/v3/smtp/email", bytes.NewBuffer(jsonBytes))
-	if err != nil {
-		log.Printf("🔴 [EMAIL ERROR] Failed to create HTTP request: %v", err)
-		return
-	}
-
-	req.Header.Set("api-key", brevoAPIKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("🔴 [EMAIL ERROR] Brevo HTTPS request failed: %v", err)
+		log.Printf("🔴 [EMAIL ERROR] Google Script relay request failed: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		var errResp map[string]interface{}
-		_ = json.NewDecoder(resp.Body).Decode(&errResp)
-		log.Printf("🔴 [EMAIL ERROR] Brevo returned status %d: %v", resp.StatusCode, errResp)
+		log.Printf("🔴 [EMAIL ERROR] Google Script relay returned HTTP status %d", resp.StatusCode)
 		return
 	}
 
-	log.Printf("🟢 [EMAIL SUCCESS] Verification OTP delivered to %s via Brevo HTTPS", toEmail)
+	log.Printf("🟢 [EMAIL SUCCESS] Verification OTP successfully sent to %s", toEmail)
 }
 
 // 2️⃣ Step 2: Verify OTP, commit user to Postgres, and initialize user-service profile
@@ -202,15 +175,15 @@ func (s *AuthServiceImpl) VerifyEmailAndCommit(ctx context.Context, email string
 		IsBanned: false,
 	}
 
-	// Commit user to PostgreSQL Database now
+	// Commit user to PostgreSQL Database
 	if err := s.userRepo.Create(ctx, newUser); err != nil {
 		return nil, fmt.Errorf("failed to commit user record: %w", err)
 	}
 
-	// Clean up Redis temporary keys
+	// Clean up temporary keys in Redis
 	_, _ = s.redisClient.Del(ctx, "otp:"+email, "staged:"+email).Result()
 
-	// ⚡ 3️⃣ AUTO-CREATE PROFILE IN USER-SERVICE CONTAINER VIA INTERNAL BRIDGE
+	// ⚡ 3️⃣ Initialize Profile in user-service
 	userServiceBase := os.Getenv("USER_SERVICE_URL")
 	if userServiceBase == "" {
 		userServiceBase = "http://user-service:8002"
