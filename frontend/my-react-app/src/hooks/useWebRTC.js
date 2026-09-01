@@ -4,8 +4,9 @@ import { soundEffects } from '../utils/soundEffects';
 const STUN_SERVER_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
-  ]
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+  ],
 };
 
 export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMessage, wsMessages) {
@@ -16,20 +17,23 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
 
   const peerConnectionRef = useRef(null);
   const activePeerIdRef = useRef(recipientUserId);
+  const pendingCandidatesRef = useRef([]);
 
   useEffect(() => {
     activePeerIdRef.current = recipientUserId;
   }, [recipientUserId]);
 
   const endCall = useCallback((notifyRemote = true, reason = 'CALL_END') => {
-    soundEffects.stopRingtone();
+    try {
+      soundEffects.stopRingtone();
+    } catch (_) {}
 
     if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
+      localStream.getTracks().forEach((track) => track.stop());
       setLocalStream(null);
     }
     if (remoteStream) {
-      remoteStream.getTracks().forEach(track => track.stop());
+      remoteStream.getTracks().forEach((track) => track.stop());
       setRemoteStream(null);
     }
     if (peerConnectionRef.current) {
@@ -38,6 +42,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
     }
+    pendingCandidatesRef.current = [];
     setCallStatus(reason === 'DECLINED' ? 'DECLINED' : 'IDLE');
     setIncomingOffer(null);
 
@@ -47,7 +52,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
         type: reason,
         room_id: activeRoomId,
         target_id: target,
-        content: 'hangup'
+        content: 'hangup',
       });
     }
   }, [localStream, remoteStream, activeRoomId, sendMessage]);
@@ -63,15 +68,23 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
           type: 'ICE_CANDIDATE',
           room_id: activeRoomId,
           target_id: targetId,
-          content: JSON.stringify(event.candidate)
+          content: JSON.stringify(event.candidate),
         });
       }
     };
 
     pc.ontrack = (event) => {
-      soundEffects.stopRingtone();
-      console.log("🟢 [WebRTC Media Stream Synchronized]:", event.streams[0]);
-      setRemoteStream(event.streams[0]);
+      try {
+        soundEffects.stopRingtone();
+      } catch (_) {}
+      
+      console.log('🟢 [WebRTC Track Received]:', event.track.kind, event.streams);
+      if (event.streams && event.streams[0]) {
+        setRemoteStream(event.streams[0]);
+      } else {
+        const inboundStream = new MediaStream([event.track]);
+        setRemoteStream(inboundStream);
+      }
       setCallStatus('CONNECTED');
     };
 
@@ -79,58 +92,68 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
     return pc;
   }, [activeRoomId, sendMessage]);
 
-  // ⚡ Upgraded startCall supporting explicit video/audio payload mapping
   const startCall = async (stream, callType = 'audio') => {
     setLocalStream(stream);
     const target = activePeerIdRef.current;
     const pc = createPeerConnection(target);
-    
-    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
     try {
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
-        offerToReceiveVideo: callType === 'video'
+        offerToReceiveVideo: callType === 'video',
       });
       await pc.setLocalDescription(offer);
       setCallStatus('RINGING_OUTGOING');
-      soundEffects.playRingbackTone();
+      try {
+        soundEffects.playRingbackTone();
+      } catch (_) {}
 
-      // Wrap offer and call type together so receiver knows it's a video call
       const envelope = {
         callType: callType,
-        sdp: offer
+        sdp: offer,
       };
 
       sendMessage({
         type: 'CALL_OFFER',
         room_id: activeRoomId,
         target_id: target,
-        content: JSON.stringify(envelope)
+        content: JSON.stringify(envelope),
       });
-      console.log(`🟢 [WebRTC ${callType.toUpperCase()} Offer Dispatched to Target:`, target, "]");
+      console.log(`🟢 [WebRTC ${callType.toUpperCase()} Offer Dispatched]:`, target);
     } catch (err) {
-      console.error("❌ Failed to create offer:", err);
+      console.error('❌ Failed to create offer:', err);
       endCall(false);
     }
   };
 
   const acceptIncomingCall = async (isVideo) => {
     if (!incomingOffer) return;
-    soundEffects.stopRingtone();
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: true, 
-        video: isVideo ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false 
+      soundEffects.stopRingtone();
+    } catch (_) {}
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: isVideo ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
       });
       setLocalStream(stream);
       const target = activePeerIdRef.current;
       const pc = createPeerConnection(target);
 
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       const actualOffer = incomingOffer.sdp || incomingOffer;
       await pc.setRemoteDescription(new RTCSessionDescription(actualOffer));
+
+      // Flush buffered ICE candidates
+      while (pendingCandidatesRef.current.length > 0) {
+        const candidate = pendingCandidatesRef.current.shift();
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       setCallStatus('CONNECTED');
@@ -139,23 +162,25 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
         type: 'CALL_ANSWER',
         room_id: activeRoomId,
         target_id: target,
-        content: JSON.stringify(answer)
+        content: JSON.stringify(answer),
       });
     } catch (err) {
-      console.error("❌ Failed to accept call:", err);
+      console.error('❌ Failed to accept call:', err);
       endCall(false);
     }
   };
 
   const declineIncomingCall = () => {
-    soundEffects.stopRingtone();
+    try {
+      soundEffects.stopRingtone();
+    } catch (_) {}
     setCallStatus('DECLINED');
     const target = activePeerIdRef.current;
     sendMessage({
       type: 'CALL_DECLINED',
       room_id: activeRoomId,
       target_id: target,
-      content: 'declined'
+      content: 'declined',
     });
     endCall(false, 'DECLINED');
   };
@@ -179,28 +204,37 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
         }
         setIncomingOffer(parsed);
         setCallStatus('RINGING_INCOMING');
-        soundEffects.playRingbackTone();
-      } 
-      else if (latest.type === 'CALL_ANSWER') {
-        soundEffects.stopRingtone();
+        try {
+          soundEffects.playRingbackTone();
+        } catch (_) {}
+      } else if (latest.type === 'CALL_ANSWER') {
+        try {
+          soundEffects.stopRingtone();
+        } catch (_) {}
         const answer = JSON.parse(latest.content);
         if (pc.signalingState !== 'stable') {
           await pc.setRemoteDescription(new RTCSessionDescription(answer));
           setCallStatus('CONNECTED');
+
+          while (pendingCandidatesRef.current.length > 0) {
+            const candidate = pendingCandidatesRef.current.shift();
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          }
         }
-      } 
-      else if (latest.type === 'ICE_CANDIDATE') {
+      } else if (latest.type === 'ICE_CANDIDATE') {
         const candidate = JSON.parse(latest.content);
-        if (pc.remoteDescription) {
+        if (pc.remoteDescription && pc.remoteDescription.type) {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } else {
+          pendingCandidatesRef.current.push(candidate);
         }
-      }
-      else if (latest.type === 'CALL_DECLINED') {
-        soundEffects.stopRingtone();
+      } else if (latest.type === 'CALL_DECLINED') {
+        try {
+          soundEffects.stopRingtone();
+        } catch (_) {}
         setCallStatus('DECLINED');
         setTimeout(() => endCall(false, 'DECLINED'), 1500);
-      }
-      else if (latest.type === 'CALL_END') {
+      } else if (latest.type === 'CALL_END') {
         endCall(false, 'ENDED');
       }
     };
@@ -210,5 +244,5 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
     }
   }, [wsMessages, currentUserId, createPeerConnection, endCall]);
 
-  return { localStream, remoteStream, callStatus, startCall, acceptIncomingCall, declineIncomingCall, endCall };
+  return { localStream, remoteStream, callStatus, incomingOffer, startCall, acceptIncomingCall, declineIncomingCall, endCall };
 }

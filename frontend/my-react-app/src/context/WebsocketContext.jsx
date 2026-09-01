@@ -61,17 +61,26 @@ export const WebSocketProvider = ({ children }) => {
           data.type === 'CALL_OFFER' ||
           data.type === 'CALL_ANSWER' ||
           data.type === 'ICE_CANDIDATE' ||
-          data.type === 'CALL_END'
+          data.type === 'CALL_END' ||
+          data.type === 'CALL_DECLINED'
         ) {
           if (String(data.sender_id) !== String(currentUserId)) {
             if (data.type === 'CALL_OFFER') {
+              let callType = 'audio';
+              try {
+                const parsedContent = JSON.parse(data.content);
+                callType = parsedContent.callType || 'audio';
+              } catch (e) {
+                console.warn('Could not parse call envelope:', e);
+              }
+
               setIncomingCall({
                 callerId: data.sender_id,
                 roomID: data.room_id,
-                type: data.content && data.content.includes('video') ? 'video' : 'audio',
+                type: callType,
                 content: data.content,
               });
-            } else if (data.type === 'CALL_END') {
+            } else if (data.type === 'CALL_END' || data.type === 'CALL_DECLINED') {
               setIncomingCall(null);
             }
           }
@@ -83,7 +92,6 @@ export const WebSocketProvider = ({ children }) => {
         console.warn('⚠️ Raw socket payload received:', event.data);
       }
     };
-
     ws.onerror = (error) => {
       console.error('❌ [WebSocket Gateway Link Warning]: Node failover in progress...');
     };
