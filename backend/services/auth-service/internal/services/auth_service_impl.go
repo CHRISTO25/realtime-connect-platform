@@ -102,9 +102,19 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req dto.RegisterRequest)
 }
 
 // Helper: Send OTP via Google Apps Script HTTPS Relay (Sends to any recipient without domain restriction)
+// Helper: Send OTP via Google Apps Script HTTPS Relay
 func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
 	scriptURL := strings.TrimSpace(os.Getenv("GMAIL_RELAY_URL"))
 	relayKey := strings.TrimSpace(os.Getenv("GMAIL_RELAY_KEY"))
+
+	// Strip accidental markdown link artifacts or quotes if pasted with [url](url)
+	if strings.Contains(scriptURL, "](") {
+		parts := strings.Split(scriptURL, "](")
+		if len(parts) > 1 {
+			scriptURL = strings.TrimRight(parts[1], ")")
+		}
+	}
+	scriptURL = strings.Trim(scriptURL, "[]()\"' ")
 
 	if relayKey == "" {
 		relayKey = "my_secure_email_secret_12345"
@@ -124,7 +134,6 @@ func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
 
 	log.Printf("⚡ [EMAIL INFO] Dispatching OTP to %s via Google Script Relay...", toEmail)
 
-	// Google Apps Script uses 302 redirects upon execution; http.Client automatically handles this
 	client := &http.Client{
 		Timeout: 20 * time.Second,
 	}
