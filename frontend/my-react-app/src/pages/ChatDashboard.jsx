@@ -290,35 +290,38 @@ export default function ChatDashboard() {
     setUploadProgress(0);
   }, [previewUrl]);
 
-  // Trigger voice call
-const handleInitiateAudioCall = async () => {
-  if (!recipientId) return alert("Select a direct friend to initiate a voice call.");
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: false,
-    });
-    await startCall(stream, 'audio');
-  } catch (err) {
-    console.error("Microphone access denied:", err);
-    alert("Microphone permissions required for voice calls.");
-  }
-};
+  // Updated calling actions inside ChatDashboard.jsx
+  const handleInitiateAudioCall = async () => {
+    if (!recipientId) return alert("Select a direct friend to initiate a voice call.");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false,
+      });
+      setActiveCallType('audio');
+      await startCall(stream, 'audio');
+    } catch (err) {
+      console.error("Microphone access denied:", err);
+      alert("Microphone permissions required for voice calls.");
+    }
+  };
 
-// Trigger video call
-const handleInitiateVideoCall = async () => {
-  if (!recipientId) return alert("Select a direct friend to initiate a video call.");
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ 
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" } 
-    });
-    await startCall(stream, 'video');
-  } catch (err) {
-    console.error("Camera Permission Error:", err);
-    alert("Camera & Microphone permissions required for video calls.");
-  }
-};
+  const handleInitiateVideoCall = async () => {
+    if (!recipientId) return alert("Select a direct friend to initiate a video call.");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" } 
+      });
+      setActiveCallType('video');
+      await startCall(stream, 'video');
+    } catch (err) {
+      console.error("Camera Permission Error:", err);
+      alert("Camera & Microphone permissions required for video calls.");
+    }
+  };
+
+  
   const handleCreateGroupSubmit = async (e) => {
     e.preventDefault();
     if (!groupName.trim() || selectedMembers.length === 0 || isCreatingGroup || !currentUserId) return;

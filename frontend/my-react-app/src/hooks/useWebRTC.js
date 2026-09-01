@@ -86,12 +86,11 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
     };
 
     pc.ontrack = (event) => {
-      console.log('🟢 [WebRTC Track Received]:', event.track.kind);
+      console.log('🟢 [WebRTC Track Synchronized]:', event.track.kind);
       try {
         soundEffects.stopRingtone();
       } catch (_) {}
 
-      // Retain the native stream reference provided by WebRTC to prevent play interruption
       if (event.streams && event.streams[0]) {
         remoteStreamRef.current = event.streams[0];
         setRemoteStream(event.streams[0]);
@@ -109,13 +108,14 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
       if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
         setCallStatus('CONNECTED');
       } else if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
-        console.warn('⚠️ WebRTC ICE connection failed or dropped.');
+        cleanupMedia();
+        setCallStatus('IDLE');
       }
     };
 
     pcRef.current = pc;
     return pc;
-  }, [activeRoomId, sendMessage]);
+  }, [activeRoomId, sendMessage, cleanupMedia]);
 
   const drainIceCandidates = async () => {
     if (!pcRef.current || !pcRef.current.remoteDescription) return;
@@ -124,7 +124,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
       try {
         await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (e) {
-        console.warn('Failed to add queued ICE candidate:', e);
+        console.warn('ICE candidate buffering warning:', e);
       }
     }
   };
@@ -163,7 +163,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
         content: JSON.stringify(envelope),
       });
     } catch (err) {
-      console.error('❌ startCall error:', err);
+      console.error('Failed to create call offer:', err);
       endCall(false);
     }
   };
@@ -203,7 +203,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
         content: JSON.stringify(answer),
       });
     } catch (err) {
-      console.error('❌ acceptIncomingCall error:', err);
+      console.error('Failed to accept incoming call:', err);
       endCall(false);
     }
   };
@@ -229,7 +229,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
 
     if (String(latest.sender_id) === String(currentUserId)) return;
 
-    const handleMessage = async () => {
+    const handleSignaling = async () => {
       const senderId = latest.sender_id;
 
       if (latest.type === 'CALL_OFFER') {
@@ -244,8 +244,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
         try {
           soundEffects.playRingbackTone();
         } catch (_) {}
-      } 
-      else if (latest.type === 'CALL_ANSWER') {
+      } else if (latest.type === 'CALL_ANSWER') {
         try {
           soundEffects.stopRingtone();
         } catch (_) {}
@@ -258,8 +257,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
           await drainIceCandidates();
           setCallStatus('CONNECTED');
         }
-      } 
-      else if (latest.type === 'ICE_CANDIDATE') {
+      } else if (latest.type === 'ICE_CANDIDATE') {
         const candidateData = typeof latest.content === 'string' ? JSON.parse(latest.content) : latest.content;
         const pc = pcRef.current;
         
@@ -267,26 +265,24 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
           try {
             await pc.addIceCandidate(new RTCIceCandidate(candidateData));
           } catch (e) {
-            console.warn('ICE candidate addition error:', e);
+            console.warn('Error applying ICE candidate:', e);
           }
         } else {
           iceCandidatesQueue.current.push(candidateData);
         }
-      } 
-      else if (latest.type === 'CALL_DECLINED') {
+      } else if (latest.type === 'CALL_DECLINED') {
         try {
           soundEffects.stopRingtone();
         } catch (_) {}
         setCallStatus('DECLINED');
         setTimeout(() => endCall(false, 'DECLINED'), 1200);
-      } 
-      else if (latest.type === 'CALL_END') {
+      } else if (latest.type === 'CALL_END') {
         endCall(false, 'ENDED');
       }
     };
 
     if (['CALL_OFFER', 'CALL_ANSWER', 'ICE_CANDIDATE', 'CALL_DECLINED', 'CALL_END'].includes(latest.type)) {
-      handleMessage();
+      handleSignaling();
     }
   }, [wsMessages, currentUserId, initPeerConnection, endCall]);
 

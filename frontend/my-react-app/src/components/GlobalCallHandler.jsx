@@ -30,42 +30,47 @@ export default function GlobalCallHandler() {
   const isCallActive = incomingCall !== null || ['RINGING_OUTGOING', 'RINGING_INCOMING', 'CONNECTED'].includes(callStatus);
   if (!isCallActive) return null;
 
-  // Determine call type strictly from the envelope or incoming offer without defaulting connected audio calls to video
+  // Derive call type strictly from the signaling envelope
   const isVideo = incomingOffer?.callType === 'video' || incomingCall?.type === 'video';
-
   const callerDisplayName = targetPeerId ? `User (${targetPeerId.substring(0, 6)}...)` : 'Peer';
+
+  const handleEnd = () => {
+    endCall(true);
+    setIncomingCall(null);
+  };
+
+  const handleReject = () => {
+    if (callStatus === 'RINGING_INCOMING') {
+      declineIncomingCall();
+    } else {
+      endCall(true);
+    }
+    setIncomingCall(null);
+  };
 
   return (
     <>
       {!isVideo ? (
         <AudioCallModal
           isOpen={true}
-          onClose={() => { endCall(true); setIncomingCall(null); }}
+          onClose={handleEnd}
           callerName={callerDisplayName}
           callStatus={callStatus}
           localStream={localStream}
           remoteStream={remoteStream}
           onAccept={callStatus === 'RINGING_INCOMING' ? async () => await acceptIncomingCall(false) : null}
-          onReject={() => {
-            if (callStatus === 'RINGING_INCOMING') declineIncomingCall();
-            else endCall(true);
-            setIncomingCall(null);
-          }}
+          onReject={handleReject}
         />
       ) : (
         <VideoCallModal
           isOpen={true}
-          onClose={() => { endCall(true); setIncomingCall(null); }}
+          onClose={handleEnd}
           callerName={callerDisplayName}
           callStatus={callStatus}
           localStream={localStream}
           remoteStream={remoteStream}
           onAccept={callStatus === 'RINGING_INCOMING' ? async () => await acceptIncomingCall(true) : null}
-          onReject={() => {
-            if (callStatus === 'RINGING_INCOMING') declineIncomingCall();
-            else endCall(true);
-            setIncomingCall(null);
-          }}
+          onReject={handleReject}
         />
       )}
     </>
