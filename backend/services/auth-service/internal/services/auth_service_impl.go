@@ -102,53 +102,61 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req dto.RegisterRequest)
 }
 
 // Helper: Send OTP via Gmail SMTP with direct TLS fallback and explicit error logging
-// Helper: Send OTP via Gmail SMTP with explicit STARTTLS on port 587
-// Helper: Send OTP via Resend HTTPS API (Bypasses Render SMTP port blocks)
+// Helper: Send OTP via Brevo HTTPS REST API (100% Free - Sends to any email address)
 func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
-	resendAPIKey := strings.TrimSpace(os.Getenv("RESEND_API_KEY"))
-	fromEmail := strings.TrimSpace(os.Getenv("SMTP_FROM"))
+	brevoAPIKey := strings.TrimSpace(os.Getenv("BREVO_API_KEY"))
+	fromEmail := strings.TrimSpace(os.Getenv("BREVO_SENDER_EMAIL"))
+	fromName := strings.TrimSpace(os.Getenv("BREVO_SENDER_NAME"))
 
+	if fromName == "" {
+		fromName = "Chatting App Support"
+	}
 	if fromEmail == "" {
-		// Use Resend's default verified testing sender if custom domain is not set
-		fromEmail = "onboarding@resend.dev"
+		fromEmail = "christovarghese555@gmail.com"
 	}
 
-	if resendAPIKey == "" {
-		log.Printf("🔴 [EMAIL ERROR] Missing RESEND_API_KEY! Add it to your Render environment variables.")
+	if brevoAPIKey == "" {
+		log.Printf("🔴 [EMAIL ERROR] Missing BREVO_API_KEY in environment variables")
 		return
 	}
 
-	log.Printf("⚡ [EMAIL INFO] Dispatching OTP to %s via Resend HTTPS API...", toEmail)
+	log.Printf("⚡ [EMAIL INFO] Dispatching OTP to %s via Brevo HTTPS API...", toEmail)
 
 	payload := map[string]interface{}{
-		"from":    fromEmail,
-		"to":      []string{toEmail},
-		"subject": "Chatting App Verification Code",
-		"html": fmt.Sprintf(
-			"<p>Hello,</p><p>Your account activation code is: <strong>%s</strong></p><p>This code will expire in 10 minutes.</p><p>Regards,<br>Chatting App Support</p>",
+		"sender": map[string]string{
+			"name":  fromName,
+			"email": fromEmail,
+		},
+		"to": []map[string]string{
+			{"email": toEmail},
+		},
+		"subject": "Chatting App Account Verification Code",
+		"htmlContent": fmt.Sprintf(
+			"<h3>Account Verification</h3><p>Hello,</p><p>Your account activation code is: <strong style='font-size: 18px; color: #2563eb;'>%s</strong></p><p>This code will expire in 10 minutes.</p><br/><p>Regards,<br>Chatting App Team</p>",
 			otp,
 		),
 	}
 
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("🔴 [EMAIL ERROR] Failed to encode email payload: %v", err)
+		log.Printf("🔴 [EMAIL ERROR] Failed to encode JSON payload: %v", err)
 		return
 	}
 
-	req, err := http.NewRequest("POST", "https://api.resend.com/emails", bytes.NewBuffer(jsonBytes))
+	req, err := http.NewRequest("POST", "https://api.brevo.com/v3/smtp/email", bytes.NewBuffer(jsonBytes))
 	if err != nil {
 		log.Printf("🔴 [EMAIL ERROR] Failed to create HTTP request: %v", err)
 		return
 	}
 
-	req.Header.Set("Authorization", "Bearer "+resendAPIKey)
+	req.Header.Set("api-key", brevoAPIKey)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("🔴 [EMAIL ERROR] HTTPS request failed: %v", err)
+		log.Printf("🔴 [EMAIL ERROR] Brevo HTTPS request failed: %v", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -156,11 +164,11 @@ func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
 	if resp.StatusCode >= 400 {
 		var errResp map[string]interface{}
 		_ = json.NewDecoder(resp.Body).Decode(&errResp)
-		log.Printf("🔴 [EMAIL ERROR] Resend returned status %d: %v", resp.StatusCode, errResp)
+		log.Printf("🔴 [EMAIL ERROR] Brevo returned status %d: %v", resp.StatusCode, errResp)
 		return
 	}
 
-	log.Printf("🟢 [EMAIL SUCCESS] Verification OTP delivered to %s via HTTPS", toEmail)
+	log.Printf("🟢 [EMAIL SUCCESS] Verification OTP delivered to %s via Brevo HTTPS", toEmail)
 }
 
 // 2️⃣ Step 2: Verify OTP, commit user to Postgres, and initialize user-service profile
