@@ -22,26 +22,27 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// Shared HTTP Transport configured for Render HTTPS routing and connection pooling
 var defaultTransport = &http.Transport{
 	Proxy: http.ProxyFromEnvironment,
 	DialContext: (&net.Dialer{
-		Timeout:   30 * time.Second,
+		Timeout:   10 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}).DialContext,
 	TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
-	TLSHandshakeTimeout:   15 * time.Second,
-	ResponseHeaderTimeout: 60 * time.Second,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ResponseHeaderTimeout: 15 * time.Second,
 	ExpectContinueTimeout: 1 * time.Second,
 	MaxIdleConns:          100,
 	IdleConnTimeout:       90 * time.Second,
 }
 
-// Increased timeout to accommodate Render cold starts (30s instead of 2s)
 var internalHTTPClient = &http.Client{
-	Timeout:   30 * time.Second,
+	Timeout:   2 * time.Second,
 	Transport: defaultTransport,
 }
 
+// BackendNode represents a single upstream microservice instance in the pool
 type BackendNode struct {
 	URL   *url.URL
 	Proxy *httputil.ReverseProxy
@@ -61,6 +62,7 @@ func (node *BackendNode) IsAlive() bool {
 	return node.Alive
 }
 
+// LoadBalancer manages dynamic health checks and round-robin failover routing
 type LoadBalancer struct {
 	nodes   []*BackendNode
 	current uint64
@@ -97,7 +99,7 @@ func NewLoadBalancer(targets []string) *LoadBalancer {
 }
 
 func (lb *LoadBalancer) startHealthCheckRoutine() {
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -154,7 +156,6 @@ func (lb *LoadBalancer) GetNextHealthyNode() (*BackendNode, bool) {
 		}
 	}
 
-	// If all marked down (e.g. cold start), fallback to first node rather than dropping traffic
 	return lb.nodes[0], false
 }
 
@@ -173,6 +174,16 @@ func createReverseProxy(target string) (*httputil.ReverseProxy, error) {
 		req.Host = parsedURL.Host
 		req.URL.Scheme = parsedURL.Scheme
 		req.URL.Host = parsedURL.Host
+		req.Header.Del("X-Forwarded-Host")
+		req.Header.Del("X-Forwarded-Proto")
+	}
+
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		resp.Header.Del("Access-Control-Allow-Origin")
+		resp.Header.Del("Access-Control-Allow-Credentials")
+		resp.Header.Del("Access-Control-Allow-Methods")
+		resp.Header.Del("Access-Control-Allow-Headers")
+		return nil
 	}
 
 	targetStr := parsedURL.String()
@@ -189,6 +200,7 @@ func createReverseProxy(target string) (*httputil.ReverseProxy, error) {
 	return proxy, nil
 }
 
+// checkUserBanStatus queries user-service to ensure banned users are rejected immediately
 func checkUserBanStatus(ctx context.Context, userServiceURL, userID string) bool {
 	endpoint := fmt.Sprintf("%s/api/v1/users/internal/status?user_id=%s", strings.TrimRight(userServiceURL, "/"), url.QueryEscape(userID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -306,12 +318,16 @@ func main() {
 		})
 	})
 
+	// ==========================================
 	// 1. PUBLIC AUTH ROUTES
+	// ==========================================
 	r.Any("/api/v1/auth/*path", func(c *gin.Context) {
 		authProxy.ServeHTTP(c.Writer, c.Request)
 	})
 
+	// ==========================================
 	// 2. PROTECTED ROUTES & CENTRALIZED JWT GUARD
+	// ==========================================
 	authGroup := r.Group("/")
 	authGroup.Use(func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
@@ -340,6 +356,7 @@ func main() {
 		c.Next()
 	})
 
+	// User Service Path Normalization
 	userForwarder := func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if !strings.HasPrefix(path, "/api/v1/users") {
@@ -366,6 +383,7 @@ func main() {
 	authGroup.Any("/heartbeat", userForwarder)
 	authGroup.Any("/logout", userForwarder)
 
+	// Chat REST Routes
 	authGroup.Any("/api/v1/chat/*path", func(c *gin.Context) {
 		node, _ := chatLB.GetNextHealthyNode()
 		if node != nil {
@@ -375,7 +393,9 @@ func main() {
 		}
 	})
 
+	// ==========================================
 	// 3. WEBSOCKET ROUTING
+	// ==========================================
 	r.GET("/ws", func(c *gin.Context) {
 		tokenStr := c.Query("token")
 		if tokenStr == "" {
