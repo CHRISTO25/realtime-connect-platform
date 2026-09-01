@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -18,12 +22,27 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// Global shared HTTP client with timeout for internal gateway queries
-var internalHTTPClient = &http.Client{
-	Timeout: 2 * time.Second,
+// Shared HTTP Transport configured for Render HTTPS routing and connection pooling
+var defaultTransport = &http.Transport{
+	Proxy: http.ProxyFromEnvironment,
+	DialContext: (&net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+	TLSHandshakeTimeout:   10 * time.Second,
+	ResponseHeaderTimeout: 15 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
+	MaxIdleConns:          100,
+	IdleConnTimeout:       90 * time.Second,
 }
 
-// BackendNode represents a single microservice node in the load balancing pool
+var internalHTTPClient = &http.Client{
+	Timeout:   2 * time.Second,
+	Transport: defaultTransport,
+}
+
+// BackendNode represents a single upstream microservice instance in the pool
 type BackendNode struct {
 	URL   *url.URL
 	Proxy *httputil.ReverseProxy
@@ -33,8 +52,8 @@ type BackendNode struct {
 
 func (node *BackendNode) SetAlive(alive bool) {
 	node.mux.Lock()
+	defer node.mux.Unlock()
 	node.Alive = alive
-	node.mux.Unlock()
 }
 
 func (node *BackendNode) IsAlive() bool {
@@ -43,7 +62,7 @@ func (node *BackendNode) IsAlive() bool {
 	return node.Alive
 }
 
-// LoadBalancer manages dynamic health checks and failover routing across replicas
+// LoadBalancer manages dynamic health checks and round-robin failover routing
 type LoadBalancer struct {
 	nodes   []*BackendNode
 	current uint64
@@ -53,45 +72,18 @@ func NewLoadBalancer(targets []string) *LoadBalancer {
 	var nodes []*BackendNode
 
 	for _, target := range targets {
-		trimmedTarget := strings.TrimSpace(target)
-		if trimmedTarget == "" {
+		trimmed := strings.TrimSpace(target)
+		if trimmed == "" {
 			continue
 		}
 
-		parsedURL, err := url.Parse(trimmedTarget)
+		proxy, err := createReverseProxy(trimmed)
 		if err != nil {
-			log.Printf("⚠️ Invalid target upstream URL %s: %v", trimmedTarget, err)
+			log.Printf("⚠️ [LoadBalancer] Invalid target URL %s: %v", trimmed, err)
 			continue
 		}
 
-		proxy := httputil.NewSingleHostReverseProxy(parsedURL)
-		originalDirector := proxy.Director
-
-		proxy.Director = func(req *http.Request) {
-			originalDirector(req)
-			req.Host = parsedURL.Host
-			req.URL.Scheme = parsedURL.Scheme
-			req.URL.Host = parsedURL.Host
-			req.Header.Del("X-Forwarded-Host")
-		}
-
-		// Strip downstream duplicate CORS headers
-		proxy.ModifyResponse = func(resp *http.Response) error {
-			resp.Header.Del("Access-Control-Allow-Origin")
-			resp.Header.Del("Access-Control-Allow-Credentials")
-			resp.Header.Del("Access-Control-Allow-Methods")
-			resp.Header.Del("Access-Control-Allow-Headers")
-			return nil
-		}
-
-		targetCopy := trimmedTarget
-		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-			log.Printf("❌ [Gateway Error] Target %s unreachable for %s: %v", targetCopy, r.URL.Path, err)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadGateway)
-			w.Write([]byte(`{"success":false,"error":"Microservice node is offline or unreachable"}`))
-		}
-
+		parsedURL, _ := url.Parse(trimmed)
 		nodes = append(nodes, &BackendNode{
 			URL:   parsedURL,
 			Proxy: proxy,
@@ -106,41 +98,50 @@ func NewLoadBalancer(targets []string) *LoadBalancer {
 	return lb
 }
 
-// Dynamic Background Health Checker
 func (lb *LoadBalancer) startHealthCheckRoutine() {
-	client := http.Client{Timeout: 2000 * time.Millisecond}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 
-	for {
-		time.Sleep(3 * time.Second)
+	for range ticker.C {
 		for _, node := range lb.nodes {
-			healthURL := strings.TrimRight(node.URL.String(), "/") + "/health"
-			resp, err := client.Get(healthURL)
-
-			if err != nil || resp.StatusCode >= 400 {
-				healthURL = strings.TrimRight(node.URL.String(), "/") + "/api/v1/chat/health"
-				resp, err = client.Get(healthURL)
+			targetURL := strings.TrimRight(node.URL.String(), "/") + "/health"
+			req, err := http.NewRequest(http.MethodGet, targetURL, nil)
+			if err != nil {
+				continue
 			}
 
-			if err != nil || (resp != nil && resp.StatusCode >= 500) {
-				if node.IsAlive() {
-					node.SetAlive(false)
-					log.Printf("🔴 [Health Check Failover] Node %s DOWN. Dropped from balancing pool.", node.URL.String())
-				}
-			} else {
-				if !node.IsAlive() {
-					node.SetAlive(true)
-					log.Printf("🟢 [Health Check Failover] Node %s RECOVERED. Restored into balancing pool.", node.URL.String())
+			resp, err := internalHTTPClient.Do(req)
+			healthy := err == nil && resp.StatusCode < http.StatusBadRequest
+
+			if !healthy {
+				altURL := strings.TrimRight(node.URL.String(), "/") + "/api/v1/chat/health"
+				if altReq, altErr := http.NewRequest(http.MethodGet, altURL, nil); altErr == nil {
+					if altResp, altDoErr := internalHTTPClient.Do(altReq); altDoErr == nil {
+						healthy = altResp.StatusCode < http.StatusBadRequest
+						_ = altResp.Body.Close()
+					}
 				}
 			}
 
 			if resp != nil {
 				_ = resp.Body.Close()
 			}
+
+			if healthy {
+				if !node.IsAlive() {
+					node.SetAlive(true)
+					log.Printf("🟢 [HealthCheck] Node %s RECOVERED. Restored to pool.", node.URL.String())
+				}
+			} else {
+				if node.IsAlive() {
+					node.SetAlive(false)
+					log.Printf("🔴 [HealthCheck] Node %s DOWN. Removed from pool.", node.URL.String())
+				}
+			}
 		}
 	}
 }
 
-// GetNextHealthyNode picks an active, healthy node with round-robin failover
 func (lb *LoadBalancer) GetNextHealthyNode() (*BackendNode, bool) {
 	total := len(lb.nodes)
 	if total == 0 {
@@ -158,13 +159,14 @@ func (lb *LoadBalancer) GetNextHealthyNode() (*BackendNode, bool) {
 	return lb.nodes[0], false
 }
 
-func createProxy(target string) (*httputil.ReverseProxy, error) {
-	trimmedTarget := strings.TrimSpace(target)
-	parsedURL, err := url.Parse(trimmedTarget)
+func createReverseProxy(target string) (*httputil.ReverseProxy, error) {
+	parsedURL, err := url.Parse(strings.TrimSpace(target))
 	if err != nil {
 		return nil, err
 	}
+
 	proxy := httputil.NewSingleHostReverseProxy(parsedURL)
+	proxy.Transport = defaultTransport
 
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
@@ -173,6 +175,7 @@ func createProxy(target string) (*httputil.ReverseProxy, error) {
 		req.URL.Scheme = parsedURL.Scheme
 		req.URL.Host = parsedURL.Host
 		req.Header.Del("X-Forwarded-Host")
+		req.Header.Del("X-Forwarded-Proto")
 	}
 
 	proxy.ModifyResponse = func(resp *http.Response) error {
@@ -183,14 +186,50 @@ func createProxy(target string) (*httputil.ReverseProxy, error) {
 		return nil
 	}
 
+	targetStr := parsedURL.String()
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("❌ [Gateway 502 Error] Target %s unreachable for URL %s: %v", trimmedTarget, r.URL.Path, err)
+		log.Printf("❌ [Gateway 502] Target: %s | Path: %s | Error: %v", targetStr, r.URL.Path, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
-		w.Write([]byte(`{"success":false,"error":"Downstream microservice is offline or unreachable"}`))
+		_ = json.NewEncoder(w).Encode(gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Downstream service unreachable (%s)", targetStr),
+		})
 	}
 
 	return proxy, nil
+}
+
+// checkUserBanStatus queries user-service to ensure banned users are rejected immediately
+func checkUserBanStatus(ctx context.Context, userServiceURL, userID string) bool {
+	endpoint := fmt.Sprintf("%s/api/v1/users/internal/status?user_id=%s", strings.TrimRight(userServiceURL, "/"), url.QueryEscape(userID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false
+	}
+
+	resp, err := internalHTTPClient.Do(req)
+	if err != nil || resp == nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+
+	var statusData struct {
+		Success bool `json:"success"`
+		Data    struct {
+			IsBanned bool `json:"is_banned"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&statusData); err != nil {
+		return false
+	}
+
+	return statusData.Data.IsBanned
 }
 
 func main() {
@@ -229,14 +268,14 @@ func main() {
 		chatNode2 = "http://chat-service-2:8003"
 	}
 
-	log.Printf("⚡ Gateway Routing -> Auth: %s | User: %s | Chat Nodes: [%s, %s]", authURL, userURL, chatNode1, chatNode2)
+	log.Printf("⚡ [Gateway Init] Auth: %s | User: %s | Chat Nodes: [%s, %s]", authURL, userURL, chatNode1, chatNode2)
 
-	authProxy, err := createProxy(authURL)
+	authProxy, err := createReverseProxy(authURL)
 	if err != nil {
 		log.Fatalf("Fatal: Invalid Auth URL: %v", err)
 	}
 
-	userProxy, err := createProxy(userURL)
+	userProxy, err := createReverseProxy(userURL)
 	if err != nil {
 		log.Fatalf("Fatal: Invalid User URL: %v", err)
 	}
@@ -245,7 +284,7 @@ func main() {
 
 	r := gin.Default()
 
-	// Global Dynamic CORS Middleware
+	// Global CORS Handler
 	r.Use(func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
 		if origin == "" {
@@ -263,7 +302,7 @@ func main() {
 		c.Next()
 	})
 
-	// Gateway Health & Cluster Node Metrics API
+	// Gateway Health API
 	r.GET("/health", func(c *gin.Context) {
 		activeNodes := make([]string, 0)
 		for _, n := range chatLB.nodes {
@@ -280,14 +319,14 @@ func main() {
 	})
 
 	// ==========================================
-	// 1. PUBLIC AUTH ROUTES (:8001) — NO JWT GUARD
+	// 1. PUBLIC AUTH ROUTES
 	// ==========================================
 	r.Any("/api/v1/auth/*path", func(c *gin.Context) {
 		authProxy.ServeHTTP(c.Writer, c.Request)
 	})
 
 	// ==========================================
-	// 2. CENTRALIZED JWT GUARD & LIVE BAN ENFORCEMENT
+	// 2. PROTECTED ROUTES & CENTRALIZED JWT GUARD
 	// ==========================================
 	authGroup := r.Group("/")
 	authGroup.Use(func(c *gin.Context) {
@@ -306,38 +345,18 @@ func main() {
 			return
 		}
 
-		// Instant Gateway Ban Enforcement Check
-		statusEndpoint := strings.TrimRight(userURL, "/") + "/api/v1/users/internal/status?user_id=" + url.QueryEscape(claims.UserID)
-		statusReq, reqErr := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, statusEndpoint, nil)
-		if reqErr == nil {
-			statusResp, statusErr := internalHTTPClient.Do(statusReq)
-			if statusErr == nil && statusResp != nil {
-				defer statusResp.Body.Close()
-				if statusResp.StatusCode == http.StatusOK {
-					var statusData struct {
-						Success bool `json:"success"`
-						Data    struct {
-							IsBanned bool `json:"is_banned"`
-						} `json:"data"`
-					}
-					if json.NewDecoder(statusResp.Body).Decode(&statusData) == nil {
-						if statusData.Data.IsBanned {
-							c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Your account has been suspended by an administrator."})
-							c.Abort()
-							return
-						}
-					}
-				}
-			}
+		if checkUserBanStatus(c.Request.Context(), userURL, claims.UserID) {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Your account has been suspended by an administrator."})
+			c.Abort()
+			return
 		}
 
-		// Inject verified metadata headers downstream
 		c.Request.Header.Set("X-User-ID", claims.UserID)
 		c.Request.Header.Set("X-User-Role", claims.Role)
 		c.Next()
 	})
 
-	// Path Normalization for user-service (:8002)
+	// User Service Path Normalization
 	userForwarder := func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if !strings.HasPrefix(path, "/api/v1/users") {
@@ -354,7 +373,6 @@ func main() {
 		authProxy.ServeHTTP(c.Writer, c.Request)
 	})
 
-	// Shorthand Fallback Mappings to user-service
 	authGroup.Any("/friends/*path", userForwarder)
 	authGroup.Any("/block/*path", userForwarder)
 	authGroup.Any("/block", userForwarder)
@@ -365,7 +383,7 @@ func main() {
 	authGroup.Any("/heartbeat", userForwarder)
 	authGroup.Any("/logout", userForwarder)
 
-	// Balanced Chat REST routes
+	// Chat REST Routes
 	authGroup.Any("/api/v1/chat/*path", func(c *gin.Context) {
 		node, _ := chatLB.GetNextHealthyNode()
 		if node != nil {
@@ -376,7 +394,7 @@ func main() {
 	})
 
 	// ==========================================
-	// 3. WEBSOCKET TUNNEL (FAILOVER BALANCED)
+	// 3. WEBSOCKET ROUTING
 	// ==========================================
 	r.GET("/ws", func(c *gin.Context) {
 		tokenStr := c.Query("token")
@@ -398,43 +416,23 @@ func main() {
 			return
 		}
 
-		// Instant WebSocket Handshake Ban Check
-		statusEndpoint := strings.TrimRight(userURL, "/") + "/api/v1/users/internal/status?user_id=" + url.QueryEscape(claims.UserID)
-		statusReq, reqErr := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, statusEndpoint, nil)
-		if reqErr == nil {
-			statusResp, statusErr := internalHTTPClient.Do(statusReq)
-			if statusErr == nil && statusResp != nil {
-				defer statusResp.Body.Close()
-				if statusResp.StatusCode == http.StatusOK {
-					var statusData struct {
-						Success bool `json:"success"`
-						Data    struct {
-							IsBanned bool `json:"is_banned"`
-						} `json:"data"`
-					}
-					if json.NewDecoder(statusResp.Body).Decode(&statusData) == nil {
-						if statusData.Data.IsBanned {
-							c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Your account has been suspended by an administrator."})
-							return
-						}
-					}
-				}
-			}
+		if checkUserBanStatus(c.Request.Context(), userURL, claims.UserID) {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Your account has been suspended by an administrator."})
+			return
 		}
 
 		c.Request.Header.Set("X-User-ID", claims.UserID)
 		c.Request.Header.Set("X-User-Role", claims.Role)
 
-		node, isHealthy := chatLB.GetNextHealthyNode()
+		node, _ := chatLB.GetNextHealthyNode()
 		if node != nil {
-			log.Printf("🔀 [Gateway WebSocket Proxy] Handshake -> Node: %s (Healthy: %v) for User: %s", node.URL.String(), isHealthy, claims.UserID)
 			node.Proxy.ServeHTTP(c.Writer, c.Request)
 		} else {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "Chat service nodes offline"})
 		}
 	})
 
-	log.Printf("⚡ API Gateway operational on :%s (Self-Healing Load Balancer Active)", port)
+	log.Printf("⚡ API Gateway operational on :%s", port)
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("Failed to start gateway server: %v", err)
 	}
