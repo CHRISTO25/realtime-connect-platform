@@ -74,7 +74,6 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
 
     const pc = new RTCPeerConnection(RTC_CONFIG);
 
-    // 1. Gather ICE Candidates and send to peer
     pc.onicecandidate = (event) => {
       if (event.candidate && targetId) {
         sendMessage({
@@ -86,25 +85,27 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
       }
     };
 
-    // 2. Receive remote media tracks and construct remote MediaStream
     pc.ontrack = (event) => {
-      console.log('🟢 [WebRTC ontrack received]:', event.track.kind);
+      console.log('🟢 [WebRTC Track Received]:', event.track.kind);
       try {
         soundEffects.stopRingtone();
       } catch (_) {}
 
-      if (!remoteStreamRef.current) {
-        remoteStreamRef.current = new MediaStream();
+      // Retain the native stream reference provided by WebRTC to prevent play interruption
+      if (event.streams && event.streams[0]) {
+        remoteStreamRef.current = event.streams[0];
+        setRemoteStream(event.streams[0]);
+      } else {
+        if (!remoteStreamRef.current) {
+          remoteStreamRef.current = new MediaStream();
+        }
+        remoteStreamRef.current.addTrack(event.track);
+        setRemoteStream(remoteStreamRef.current);
       }
-      
-      // Attach the incoming track to our remote stream
-      remoteStreamRef.current.addTrack(event.track);
-      setRemoteStream(new MediaStream(remoteStreamRef.current.getTracks()));
       setCallStatus('CONNECTED');
     };
 
     pc.oniceconnectionstatechange = () => {
-      console.log('⚡ [ICE Connection State]:', pc.iceConnectionState);
       if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
         setCallStatus('CONNECTED');
       } else if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
@@ -116,7 +117,6 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
     return pc;
   }, [activeRoomId, sendMessage]);
 
-  // Process any ICE Candidates that arrived before setRemoteDescription finished
   const drainIceCandidates = async () => {
     if (!pcRef.current || !pcRef.current.remoteDescription) return;
     while (iceCandidatesQueue.current.length > 0) {
@@ -129,7 +129,6 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
     }
   };
 
-  // 🚀 Start Call (Caller side)
   const startCall = async (stream, callType = 'audio') => {
     cleanupMedia();
     localStreamRef.current = stream;
@@ -138,7 +137,6 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
     const target = activePeerIdRef.current;
     const pc = initPeerConnection(target);
 
-    // Add local tracks to PeerConnection
     stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
     try {
@@ -170,7 +168,6 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
     }
   };
 
-  // 📞 Accept Call (Receiver side)
   const acceptIncomingCall = async (isVideo) => {
     if (!incomingOffer) return;
     try {
@@ -189,13 +186,10 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
       const target = activePeerIdRef.current;
       const pc = initPeerConnection(target);
 
-      // Add local tracks so caller can hear/see receiver
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       const offerSdp = incomingOffer.sdp || incomingOffer;
       await pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
-
-      // Flush buffered ICE candidates
       await drainIceCandidates();
 
       const answer = await pc.createAnswer();
@@ -229,7 +223,6 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
     endCall(false, 'DECLINED');
   };
 
-  // 📡 Handle WebRTC Signaling via WebSocket
   useEffect(() => {
     if (!wsMessages || wsMessages.length === 0) return;
     const latest = wsMessages[wsMessages.length - 1];
@@ -277,7 +270,6 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
             console.warn('ICE candidate addition error:', e);
           }
         } else {
-          // Buffer candidate until remote description is set
           iceCandidatesQueue.current.push(candidateData);
         }
       } 
