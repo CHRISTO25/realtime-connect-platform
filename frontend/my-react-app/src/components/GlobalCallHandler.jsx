@@ -30,7 +30,7 @@ export default function GlobalCallHandler() {
   const isCallActive = incomingCall !== null || ['RINGING_OUTGOING', 'RINGING_INCOMING', 'CONNECTED'].includes(callStatus);
   if (!isCallActive) return null;
 
-  // Derive call type strictly from the signaling envelope
+  // Explicit type identification: checks the envelope without defaulting to video on status change
   const isVideo = incomingOffer?.callType === 'video' || incomingCall?.type === 'video';
   const callerDisplayName = targetPeerId ? `User (${targetPeerId.substring(0, 6)}...)` : 'Peer';
 
@@ -48,6 +48,10 @@ export default function GlobalCallHandler() {
     setIncomingCall(null);
   };
 
+  const handleAccept = async () => {
+    await acceptIncomingCall(isVideo);
+  };
+
   return (
     <>
       {!isVideo ? (
@@ -58,7 +62,7 @@ export default function GlobalCallHandler() {
           callStatus={callStatus}
           localStream={localStream}
           remoteStream={remoteStream}
-          onAccept={callStatus === 'RINGING_INCOMING' ? async () => await acceptIncomingCall(false) : null}
+          onAccept={callStatus === 'RINGING_INCOMING' ? handleAccept : null}
           onReject={handleReject}
         />
       ) : (
@@ -69,7 +73,7 @@ export default function GlobalCallHandler() {
           callStatus={callStatus}
           localStream={localStream}
           remoteStream={remoteStream}
-          onAccept={callStatus === 'RINGING_INCOMING' ? async () => await acceptIncomingCall(true) : null}
+          onAccept={callStatus === 'RINGING_INCOMING' ? handleAccept : null}
           onReject={handleReject}
         />
       )}

@@ -7,7 +7,6 @@ const RTC_CONFIG = {
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
   ],
   iceCandidatePoolSize: 10,
 };
@@ -30,12 +29,12 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
 
   const cleanupMedia = useCallback(() => {
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
       setLocalStream(null);
     }
     if (remoteStreamRef.current) {
-      remoteStreamRef.current.getTracks().forEach((track) => track.stop());
+      remoteStreamRef.current.getTracks().forEach((t) => t.stop());
       remoteStreamRef.current = null;
       setRemoteStream(null);
     }
@@ -47,6 +46,7 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
       pcRef.current = null;
     }
     iceCandidatesQueue.current = [];
+    window.__activeLocalStream = null;
   }, []);
 
   const endCall = useCallback((notifyRemote = true, reason = 'CALL_END') => {
@@ -86,7 +86,6 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
     };
 
     pc.ontrack = (event) => {
-      console.log('🟢 [WebRTC Track Synchronized]:', event.track.kind);
       try {
         soundEffects.stopRingtone();
       } catch (_) {}
@@ -239,6 +238,13 @@ export function useWebRTC(activeRoomId, currentUserId, recipientUserId, sendMess
         } catch {
           envelope = { callType: 'audio', sdp: latest.content };
         }
+        
+        // If caller initiated via window.__activeLocalStream
+        if (envelope.initiator && window.__activeLocalStream) {
+          startCall(window.__activeLocalStream, envelope.callType || 'audio');
+          return;
+        }
+
         setIncomingOffer(envelope);
         setCallStatus('RINGING_INCOMING');
         try {

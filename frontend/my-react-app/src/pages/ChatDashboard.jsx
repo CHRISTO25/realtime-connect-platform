@@ -290,7 +290,7 @@ export default function ChatDashboard() {
     setUploadProgress(0);
   }, [previewUrl]);
 
-  // Updated calling actions inside ChatDashboard.jsx
+  // Voice Call Trigger (Caller)
   const handleInitiateAudioCall = async () => {
     if (!recipientId) return alert("Select a direct friend to initiate a voice call.");
     try {
@@ -298,14 +298,27 @@ export default function ChatDashboard() {
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         video: false,
       });
-      setActiveCallType('audio');
-      await startCall(stream, 'audio');
+
+      // Send offer payload through WebSocket
+      sendMessage({
+        type: 'CALL_OFFER',
+        room_id: activeTarget.id,
+        target_id: recipientId,
+        content: JSON.stringify({
+          callType: 'audio',
+          initiator: true
+        })
+      });
+
+      // Let GlobalCallHandler manage the ongoing session
+      window.__activeLocalStream = stream;
     } catch (err) {
       console.error("Microphone access denied:", err);
       alert("Microphone permissions required for voice calls.");
     }
   };
 
+  // Video Call Trigger (Caller)
   const handleInitiateVideoCall = async () => {
     if (!recipientId) return alert("Select a direct friend to initiate a video call.");
     try {
@@ -313,15 +326,25 @@ export default function ChatDashboard() {
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" } 
       });
-      setActiveCallType('video');
-      await startCall(stream, 'video');
+
+      sendMessage({
+        type: 'CALL_OFFER',
+        room_id: activeTarget.id,
+        target_id: recipientId,
+        content: JSON.stringify({
+          callType: 'video',
+          initiator: true
+        })
+      });
+
+      window.__activeLocalStream = stream;
     } catch (err) {
       console.error("Camera Permission Error:", err);
       alert("Camera & Microphone permissions required for video calls.");
     }
   };
 
-  
+
   const handleCreateGroupSubmit = async (e) => {
     e.preventDefault();
     if (!groupName.trim() || selectedMembers.length === 0 || isCreatingGroup || !currentUserId) return;
