@@ -18,6 +18,11 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// Global shared HTTP client with timeout for internal gateway queries
+var internalHTTPClient = &http.Client{
+	Timeout: 2 * time.Second,
+}
+
 // BackendNode represents a single microservice node in the load balancing pool
 type BackendNode struct {
 	URL   *url.URL
@@ -48,13 +53,14 @@ func NewLoadBalancer(targets []string) *LoadBalancer {
 	var nodes []*BackendNode
 
 	for _, target := range targets {
-		if strings.TrimSpace(target) == "" {
+		trimmedTarget := strings.TrimSpace(target)
+		if trimmedTarget == "" {
 			continue
 		}
 
-		parsedURL, err := url.Parse(target)
+		parsedURL, err := url.Parse(trimmedTarget)
 		if err != nil {
-			log.Printf("⚠️ Invalid target upstream URL %s: %v", target, err)
+			log.Printf("⚠️ Invalid target upstream URL %s: %v", trimmedTarget, err)
 			continue
 		}
 
@@ -66,6 +72,7 @@ func NewLoadBalancer(targets []string) *LoadBalancer {
 			req.Host = parsedURL.Host
 			req.URL.Scheme = parsedURL.Scheme
 			req.URL.Host = parsedURL.Host
+			req.Header.Del("X-Forwarded-Host")
 		}
 
 		// Strip downstream duplicate CORS headers
@@ -77,8 +84,9 @@ func NewLoadBalancer(targets []string) *LoadBalancer {
 			return nil
 		}
 
+		targetCopy := trimmedTarget
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-			log.Printf("❌ [Gateway Error] Target %s unreachable for %s: %v", target, r.URL.Path, err)
+			log.Printf("❌ [Gateway Error] Target %s unreachable for %s: %v", targetCopy, r.URL.Path, err)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
 			w.Write([]byte(`{"success":false,"error":"Microservice node is offline or unreachable"}`))
@@ -92,22 +100,24 @@ func NewLoadBalancer(targets []string) *LoadBalancer {
 	}
 
 	lb := &LoadBalancer{nodes: nodes}
-	go lb.startHealthCheckRoutine()
+	if len(nodes) > 0 {
+		go lb.startHealthCheckRoutine()
+	}
 	return lb
 }
 
-// ⚡ Dynamic Background Health Checker: Probes nodes every 3 seconds
+// Dynamic Background Health Checker
 func (lb *LoadBalancer) startHealthCheckRoutine() {
-	client := http.Client{Timeout: 1500 * time.Millisecond}
+	client := http.Client{Timeout: 2000 * time.Millisecond}
 
 	for {
 		time.Sleep(3 * time.Second)
 		for _, node := range lb.nodes {
-			healthURL := node.URL.String() + "/health"
+			healthURL := strings.TrimRight(node.URL.String(), "/") + "/health"
 			resp, err := client.Get(healthURL)
 
 			if err != nil || resp.StatusCode >= 400 {
-				healthURL = node.URL.String() + "/api/v1/chat/health"
+				healthURL = strings.TrimRight(node.URL.String(), "/") + "/api/v1/chat/health"
 				resp, err = client.Get(healthURL)
 			}
 
@@ -130,7 +140,7 @@ func (lb *LoadBalancer) startHealthCheckRoutine() {
 	}
 }
 
-// ⚡ GetNextHealthyNode picks an active, healthy node with round-robin failover
+// GetNextHealthyNode picks an active, healthy node with round-robin failover
 func (lb *LoadBalancer) GetNextHealthyNode() (*BackendNode, bool) {
 	total := len(lb.nodes)
 	if total == 0 {
@@ -149,7 +159,8 @@ func (lb *LoadBalancer) GetNextHealthyNode() (*BackendNode, bool) {
 }
 
 func createProxy(target string) (*httputil.ReverseProxy, error) {
-	parsedURL, err := url.Parse(target)
+	trimmedTarget := strings.TrimSpace(target)
+	parsedURL, err := url.Parse(trimmedTarget)
 	if err != nil {
 		return nil, err
 	}
@@ -161,6 +172,7 @@ func createProxy(target string) (*httputil.ReverseProxy, error) {
 		req.Host = parsedURL.Host
 		req.URL.Scheme = parsedURL.Scheme
 		req.URL.Host = parsedURL.Host
+		req.Header.Del("X-Forwarded-Host")
 	}
 
 	proxy.ModifyResponse = func(resp *http.Response) error {
@@ -172,7 +184,7 @@ func createProxy(target string) (*httputil.ReverseProxy, error) {
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("❌ [Gateway 502 Error] Target %s unreachable for URL %s: %v", target, r.URL.Path, err)
+		log.Printf("❌ [Gateway 502 Error] Target %s unreachable for URL %s: %v", trimmedTarget, r.URL.Path, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte(`{"success":false,"error":"Downstream microservice is offline or unreachable"}`))
@@ -219,8 +231,16 @@ func main() {
 
 	log.Printf("⚡ Gateway Routing -> Auth: %s | User: %s | Chat Nodes: [%s, %s]", authURL, userURL, chatNode1, chatNode2)
 
-	authProxy, _ := createProxy(authURL)
-	userProxy, _ := createProxy(userURL)
+	authProxy, err := createProxy(authURL)
+	if err != nil {
+		log.Fatalf("Fatal: Invalid Auth URL: %v", err)
+	}
+
+	userProxy, err := createProxy(userURL)
+	if err != nil {
+		log.Fatalf("Fatal: Invalid User URL: %v", err)
+	}
+
 	chatLB := NewLoadBalancer([]string{chatNode1, chatNode2})
 
 	r := gin.Default()
@@ -229,14 +249,14 @@ func main() {
 	r.Use(func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
 		if origin == "" {
-			origin = "http://localhost:5173"
+			origin = "*"
 		}
 		c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-User-ID, X-User-Role")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
 
-		if c.Request.Method == "OPTIONS" {
+		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
@@ -286,25 +306,26 @@ func main() {
 			return
 		}
 
-		// ⚡ INSTANT GATEWAY BAN ENFORCEMENT CHECK:
-		httpClient := http.Client{Timeout: 1000 * time.Millisecond}
-		statusReq, _ := http.NewRequestWithContext(c.Request.Context(), "GET", userURL+"/api/v1/users/internal/status?user_id="+claims.UserID, nil)
-		statusResp, statusErr := httpClient.Do(statusReq)
-
-		if statusErr == nil && statusResp != nil {
-			defer statusResp.Body.Close()
-			if statusResp.StatusCode == http.StatusOK {
-				var statusData struct {
-					Success bool `json:"success"`
-					Data    struct {
-						IsBanned bool `json:"is_banned"`
-					} `json:"data"`
-				}
-				if json.NewDecoder(statusResp.Body).Decode(&statusData) == nil {
-					if statusData.Data.IsBanned {
-						c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Your account has been suspended by an administrator."})
-						c.Abort()
-						return
+		// Instant Gateway Ban Enforcement Check
+		statusEndpoint := strings.TrimRight(userURL, "/") + "/api/v1/users/internal/status?user_id=" + url.QueryEscape(claims.UserID)
+		statusReq, reqErr := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, statusEndpoint, nil)
+		if reqErr == nil {
+			statusResp, statusErr := internalHTTPClient.Do(statusReq)
+			if statusErr == nil && statusResp != nil {
+				defer statusResp.Body.Close()
+				if statusResp.StatusCode == http.StatusOK {
+					var statusData struct {
+						Success bool `json:"success"`
+						Data    struct {
+							IsBanned bool `json:"is_banned"`
+						} `json:"data"`
+					}
+					if json.NewDecoder(statusResp.Body).Decode(&statusData) == nil {
+						if statusData.Data.IsBanned {
+							c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Your account has been suspended by an administrator."})
+							c.Abort()
+							return
+						}
 					}
 				}
 			}
@@ -316,7 +337,7 @@ func main() {
 		c.Next()
 	})
 
-	// Smart Path Normalization for user-service (:8002)
+	// Path Normalization for user-service (:8002)
 	userForwarder := func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if !strings.HasPrefix(path, "/api/v1/users") {
@@ -342,16 +363,20 @@ func main() {
 	authGroup.Any("/profile/*path", userForwarder)
 	authGroup.Any("/profile", userForwarder)
 	authGroup.Any("/heartbeat", userForwarder)
-	authGroup.Any("/logout", userForwarder) // ◄ Added to fix 404 logout errors
+	authGroup.Any("/logout", userForwarder)
 
-	// ⚡ Health-Aware Balanced Chat REST routes
+	// Balanced Chat REST routes
 	authGroup.Any("/api/v1/chat/*path", func(c *gin.Context) {
 		node, _ := chatLB.GetNextHealthyNode()
-		node.Proxy.ServeHTTP(c.Writer, c.Request)
+		if node != nil {
+			node.Proxy.ServeHTTP(c.Writer, c.Request)
+		} else {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "No chat nodes available"})
+		}
 	})
 
 	// ==========================================
-	// 3. WEBSOCKET TUNNEL (FAILOVER BALANCED) WITH LIVE BAN ENFORCEMENT
+	// 3. WEBSOCKET TUNNEL (FAILOVER BALANCED)
 	// ==========================================
 	r.GET("/ws", func(c *gin.Context) {
 		tokenStr := c.Query("token")
@@ -373,24 +398,25 @@ func main() {
 			return
 		}
 
-		// ⚡ INSTANT WEBSOCKET HANDSHAKE BAN CHECK:
-		httpClient := http.Client{Timeout: 1000 * time.Millisecond}
-		statusReq, _ := http.NewRequestWithContext(c.Request.Context(), "GET", userURL+"/api/v1/users/internal/status?user_id="+claims.UserID, nil)
-		statusResp, statusErr := httpClient.Do(statusReq)
-
-		if statusErr == nil && statusResp != nil {
-			defer statusResp.Body.Close()
-			if statusResp.StatusCode == http.StatusOK {
-				var statusData struct {
-					Success bool `json:"success"`
-					Data    struct {
-						IsBanned bool `json:"is_banned"`
-					} `json:"data"`
-				}
-				if json.NewDecoder(statusResp.Body).Decode(&statusData) == nil {
-					if statusData.Data.IsBanned {
-						c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Your account has been suspended by an administrator."})
-						return
+		// Instant WebSocket Handshake Ban Check
+		statusEndpoint := strings.TrimRight(userURL, "/") + "/api/v1/users/internal/status?user_id=" + url.QueryEscape(claims.UserID)
+		statusReq, reqErr := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, statusEndpoint, nil)
+		if reqErr == nil {
+			statusResp, statusErr := internalHTTPClient.Do(statusReq)
+			if statusErr == nil && statusResp != nil {
+				defer statusResp.Body.Close()
+				if statusResp.StatusCode == http.StatusOK {
+					var statusData struct {
+						Success bool `json:"success"`
+						Data    struct {
+							IsBanned bool `json:"is_banned"`
+						} `json:"data"`
+					}
+					if json.NewDecoder(statusResp.Body).Decode(&statusData) == nil {
+						if statusData.Data.IsBanned {
+							c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Your account has been suspended by an administrator."})
+							return
+						}
 					}
 				}
 			}
@@ -400,8 +426,12 @@ func main() {
 		c.Request.Header.Set("X-User-Role", claims.Role)
 
 		node, isHealthy := chatLB.GetNextHealthyNode()
-		log.Printf("🔀 [Gateway WebSocket Proxy] Handshake -> Node: %s (Healthy: %v) for User: %s", node.URL.String(), isHealthy, claims.UserID)
-		node.Proxy.ServeHTTP(c.Writer, c.Request)
+		if node != nil {
+			log.Printf("🔀 [Gateway WebSocket Proxy] Handshake -> Node: %s (Healthy: %v) for User: %s", node.URL.String(), isHealthy, claims.UserID)
+			node.Proxy.ServeHTTP(c.Writer, c.Request)
+		} else {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "Chat service nodes offline"})
+		}
 	})
 
 	log.Printf("⚡ API Gateway operational on :%s (Self-Healing Load Balancer Active)", port)

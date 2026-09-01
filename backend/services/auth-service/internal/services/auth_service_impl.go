@@ -99,12 +99,13 @@ func (s *AuthServiceImpl) Register(ctx context.Context, req dto.RegisterRequest)
 }
 
 // Helper: Send OTP via Gmail SMTP
+// Helper: Send OTP via Gmail SMTP with proper fallbacks and logging
 func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
-	smtpHost := os.Getenv("SMTP_HOST")
-	smtpPort := os.Getenv("SMTP_PORT")
-	smtpUser := os.Getenv("SMTP_USER")
-	smtpPass := os.Getenv("SMTP_PASS")
-	smtpFrom := os.Getenv("SMTP_FROM")
+	smtpHost := strings.TrimSpace(os.Getenv("SMTP_HOST"))
+	smtpPort := strings.TrimSpace(os.Getenv("SMTP_PORT"))
+	smtpUser := strings.TrimSpace(os.Getenv("SMTP_USER"))
+	smtpPass := strings.TrimSpace(os.Getenv("SMTP_PASS"))
+	smtpFrom := strings.TrimSpace(os.Getenv("SMTP_FROM"))
 
 	if smtpHost == "" {
 		smtpHost = "smtp.gmail.com"
@@ -112,14 +113,28 @@ func (s *AuthServiceImpl) sendOTPEmail(toEmail string, otp string) {
 	if smtpPort == "" {
 		smtpPort = "587"
 	}
+	// Fix 1: Ensure smtpFrom always falls back to smtpUser if empty
+	if smtpFrom == "" {
+		smtpFrom = smtpUser
+	}
+
+	if smtpUser == "" || smtpPass == "" {
+		log.Printf("[SMTP ERROR] Missing SMTP credentials! SMTP_USER or SMTP_PASS is empty. Cannot send email to %s", toEmail)
+		return
+	}
 
 	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
-	msg := []byte(fmt.Sprintf("To: %s\r\n"+
-		"Subject: Chatting App Account Verification Code\r\n"+
-		"Content-Type: text/plain; charset=UTF-8\r\n\r\n"+
-		"Hello,\n\nYour account activation code is: %s\nThis code will expire in 10 minutes.\n\nRegards,\nChatting App Support", toEmail, otp))
 
+	// Fix 2: Proper RFC-compliant mail headers
+	subject := "Subject: Chatting App Account Verification Code\r\n"
+	fromHeader := fmt.Sprintf("From: %s\r\n", smtpFrom)
+	toHeader := fmt.Sprintf("To: %s\r\n", toEmail)
+	mime := "MIME-version: 1.0;\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n"
+	body := fmt.Sprintf("Hello,\r\n\r\nYour account activation code is: %s\r\nThis code will expire in 10 minutes.\r\n\r\nRegards,\r\nChatting App Support", otp)
+
+	msg := []byte(fromHeader + toHeader + subject + mime + body)
 	addr := fmt.Sprintf("%s:%s", smtpHost, smtpPort)
+
 	err := smtp.SendMail(addr, auth, smtpFrom, []string{toEmail}, msg)
 	if err != nil {
 		log.Printf("[SMTP ERROR] Failed to send OTP to %s: %v", toEmail, err)
