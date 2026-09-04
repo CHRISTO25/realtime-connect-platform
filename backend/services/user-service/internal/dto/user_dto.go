@@ -36,6 +36,7 @@ type UserListItemResponse struct {
 	CoverURL    string `json:"cover_url"`
 	IsOnline    bool   `json:"is_online"` // 👈 ADD THIS FIELD!
 	IsFollowing bool   `json:"is_following"`
+	IsBanned    bool   `json:"is_banned"`
 }
 
 type GetAllUserResponse struct {

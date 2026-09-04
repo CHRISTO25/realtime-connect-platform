@@ -83,26 +83,25 @@ func (r *ProfileRepositoryImpl) UpdateProfile(ctx context.Context, profile *mode
 		}).Error
 }
 
-// / GetAllProfilesPaginated returns non-banned user profiles with projection selection
+// GetAllProfilesPaginated returns ONLY active, non-banned profiles
 func (r *ProfileRepositoryImpl) GetAllProfilesPaginated(ctx context.Context, excludeUserID string, offset, limit int) ([]model.UserProfile, int64, error) {
 	var profiles []model.UserProfile
 	var totalCount int64
 
-	// Filter out banned users at the database level
-	query := r.db.WithContext(ctx).Model(&model.UserProfile{}).Where("is_banned = ?", false)
+	// ⚡ 1. Base query strictly excludes banned accounts using the index
+	query := r.db.WithContext(ctx).Model(&model.UserProfile{}).Where("COALESCE(is_banned, false) = ?", false)
 
-	// Filter out the requesting user's own profile
+	// ⚡ 2. Exclude the calling user directly in SQL
 	if excludeUserID != "" {
 		query = query.Where("user_id != ?", excludeUserID)
 	}
 
-	// 1. Fast Index-backed Count (uses idx_banned_status)
+	// 3. Count only legitimate active accounts for accurate pagination
 	if err := query.Count(&totalCount).Error; err != nil {
-		log.Printf("[Neon DB Query Error - Count]: %v", err)
 		return nil, 0, err
 	}
 
-	// 2. Paginated Fetch with Projection
+	// 4. Fetch the paginated slice
 	err := query.
 		Select("id, user_id, email, role, is_verified, is_banned, display_name, bio, location, avatar_url, cover_url, is_online, last_seen, created_at").
 		Offset(offset).
@@ -111,25 +110,23 @@ func (r *ProfileRepositoryImpl) GetAllProfilesPaginated(ctx context.Context, exc
 		Find(&profiles).Error
 
 	if err != nil {
-		log.Printf("[Neon DB Query Error - Find]: %v", err)
 		return nil, 0, err
 	}
 
 	return profiles, totalCount, nil
 }
 
-// SearchProfiles uses projection, indexed ILIKE matching, and fast subquery 2-way block exclusion
 func (r *ProfileRepositoryImpl) SearchProfiles(ctx context.Context, currentUserID string, searchQuery, locationQuery string, offset, limit int) ([]model.UserProfile, int64, error) {
 	var profiles []model.UserProfile
 	var totalCount int64
 
-	dbQuery := r.db.WithContext(ctx).Model(&model.UserProfile{})
+	// ⚡ 1. Database level: Strictly exclude banned accounts
+	dbQuery := r.db.WithContext(ctx).Model(&model.UserProfile{}).Where("COALESCE(is_banned, false) = ?", false)
 
-	// 1. Exclude current logged-in user & 2-way blocked users using indexed subquery
+	// ⚡ 2. Database level: Exclude the caller and 2-way blocked users
 	if currentUserID != "" {
 		dbQuery = dbQuery.Where("user_id != ?", currentUserID)
 
-		// High-performance subquery utilizing composite index on blocked_users(blocker_id, blocked_id)
 		blockedSubQuery := r.db.Model(&model.BlockedUser{}).
 			Select("CASE WHEN blocker_id = ? THEN blocked_id ELSE blocker_id END", currentUserID).
 			Where("blocker_id = ? OR blocked_id = ?", currentUserID, currentUserID)
@@ -137,7 +134,7 @@ func (r *ProfileRepositoryImpl) SearchProfiles(ctx context.Context, currentUserI
 		dbQuery = dbQuery.Where("user_id NOT IN (?)", blockedSubQuery)
 	}
 
-	// 2. Case-insensitive Search Filters
+	// 3. Case-insensitive search
 	if searchQuery != "" {
 		pattern := "%" + searchQuery + "%"
 		dbQuery = dbQuery.Where("display_name ILIKE ? OR bio ILIKE ?", pattern, pattern)
@@ -148,12 +145,12 @@ func (r *ProfileRepositoryImpl) SearchProfiles(ctx context.Context, currentUserI
 		dbQuery = dbQuery.Where("location ILIKE ?", locPattern)
 	}
 
-	// 3. Count total matching rows
+	// 4. Count only eligible, active users
 	if err := dbQuery.Count(&totalCount).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// 4. Execute Paginated Fetch with Column Projection for maximum throughput
+	// 5. Paginated projection fetch
 	err := dbQuery.
 		Select("id, user_id, email, role, is_verified, is_banned, display_name, bio, location, avatar_url, cover_url, is_online, last_seen, created_at").
 		Offset(offset).

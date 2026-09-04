@@ -140,6 +140,7 @@ func (s *UserServiceImpl) GetAllProfiles(ctx context.Context, currentUserId stri
 			CoverURL:    p.CoverURL,
 			IsOnline:    isUserActive(p.IsOnline, p.LastSeen),
 			IsFollowing: false,
+			IsBanned:    p.IsBanned,
 		})
 	}
 

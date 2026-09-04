@@ -82,19 +82,19 @@ func (r *FriendRepositoryImpl) IsFriend(ctx context.Context, userID, friendID st
 }
 
 func (r *FriendRepositoryImpl) GetFriends(ctx context.Context, userID string) ([]model.UserProfile, error) {
-	var friends []model.Friend
+	var profiles []model.UserProfile
+
+	// Join user_profiles and exclude banned profiles
 	err := r.db.WithContext(ctx).
-		Preload("FriendProfile").
-		Where("user_id = ?", userID).
-		Find(&friends).Error
+		Model(&model.UserProfile{}).
+		Joins("JOIN friends ON friends.friend_id = user_profiles.user_id").
+		Where("friends.user_id = ? AND COALESCE(user_profiles.is_banned, false) = ?", userID, false).
+		Find(&profiles).Error
+
 	if err != nil {
 		return nil, err
 	}
 
-	var profiles []model.UserProfile
-	for _, f := range friends {
-		profiles = append(profiles, f.FriendProfile)
-	}
 	return profiles, nil
 }
 
