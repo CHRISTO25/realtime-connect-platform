@@ -83,24 +83,26 @@ func (r *ProfileRepositoryImpl) UpdateProfile(ctx context.Context, profile *mode
 		}).Error
 }
 
-// GetAllProfilesPaginated returns all user profiles with projection selection
+// / GetAllProfilesPaginated returns non-banned user profiles with projection selection
 func (r *ProfileRepositoryImpl) GetAllProfilesPaginated(ctx context.Context, excludeUserID string, offset, limit int) ([]model.UserProfile, int64, error) {
 	var profiles []model.UserProfile
 	var totalCount int64
 
-	query := r.db.WithContext(ctx).Model(&model.UserProfile{})
+	// Filter out banned users at the database level
+	query := r.db.WithContext(ctx).Model(&model.UserProfile{}).Where("is_banned = ?", false)
 
+	// Filter out the requesting user's own profile
 	if excludeUserID != "" {
 		query = query.Where("user_id != ?", excludeUserID)
 	}
 
-	// 1. Fast Index-backed Count
+	// 1. Fast Index-backed Count (uses idx_banned_status)
 	if err := query.Count(&totalCount).Error; err != nil {
 		log.Printf("[Neon DB Query Error - Count]: %v", err)
 		return nil, 0, err
 	}
 
-	// 2. Paginated Fetch with Projection (Avoids SELECT *)
+	// 2. Paginated Fetch with Projection
 	err := query.
 		Select("id, user_id, email, role, is_verified, is_banned, display_name, bio, location, avatar_url, cover_url, is_online, last_seen, created_at").
 		Offset(offset).

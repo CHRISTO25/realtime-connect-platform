@@ -3,8 +3,10 @@ package model
 import "time"
 
 type UserProfile struct {
-	ID          string    `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	UserID      string    `gorm:"type:uuid;uniqueIndex:idx_user_id;not null" json:"user_id"`
+	//ID          string    `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	//UserID      string    `gorm:"type:uuid;uniqueIndex:idx_user_id;not null" json:"user_id"`
+	ID          string    `gorm:"type:uuid;primaryKey;default:gen_random_uuid();<-:create" json:"id"`
+	UserID      string    `gorm:"type:uuid;uniqueIndex:idx_user_id;not null;<-:create" json:"user_id"`
 	Username    string    `gorm:"type:varchar(100);index:idx_username" json:"username"`   // ◄ Added for display
 	Email       string    `gorm:"type:varchar(255);uniqueIndex;not null" json:"email"`    // ◄ Added for admin directory view
 	Role        string    `gorm:"type:varchar(50);default:'user'" json:"role"`            // ◄ Added ('admin' or 'user')
