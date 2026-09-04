@@ -2,12 +2,10 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom';
 import { userApi } from '../services/api/client';
 import { useAuth } from '../context/AuthContext';
-import FriendControl from '../components/FriendControl';
-import BlockedList from '../components/BlockedList';
 import UserCard from '../components/UserCard';
 import ActiveFriendsBar from '../components/ActiveFriendsBar';
 
-function useDebounce(value, delay = 300) {
+function useDebounce(value, delay = 250) {
   const [debouncedValue, setDebouncedValue] = useState(value);
   useEffect(() => {
     const handler = setTimeout(() => setDebouncedValue(value), delay);
@@ -18,41 +16,23 @@ function useDebounce(value, delay = 300) {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { token, userId: authUserId, isInitializing } = useAuth();
-
-  const activeUserId = useMemo(() => {
-    if (authUserId) return authUserId;
-    const localId = localStorage.getItem('user_id');
-    if (localId && localId !== 'undefined' && localId !== 'null') return localId;
-
-    try {
-      const activeToken = token || localStorage.getItem('access_token');
-      if (!activeToken) return null;
-      const base64Url = activeToken.split('.')[1];
-      if (!base64Url) return null;
-      let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-      while (base64.length % 4) base64 += '=';
-      const payload = JSON.parse(decodeURIComponent(escape(window.atob(base64))));
-      return payload.user_id || payload.id || null;
-    } catch (e) {
-      console.error('Failed to parse token fallback in Dashboard:', e);
-      return null;
-    }
-  }, [authUserId, token]);
+  const { token, isInitializing } = useAuth();
 
   // Search Inputs
   const [searchName, setSearchName] = useState('');
   const [searchLocation, setSearchLocation] = useState('');
-  const debouncedQuery = useDebounce(searchName, 300);
-  const debouncedLocation = useDebounce(searchLocation, 300);
+  const debouncedQuery = useDebounce(searchName, 250);
+  const debouncedLocation = useDebounce(searchLocation, 250);
 
   // Core Data States
   const [users, setUsers] = useState([]);
   const [friends, setFriends] = useState([]);
-  const [pendingRequests, setPendingRequests] = useState([]);
   const [sentRequests, setSentRequests] = useState(new Set());
 
-  // Infinite Scroll & Pagination (Locked to 4 cards per batch)
+  // Mobile Tap-To-Focus State
+  const [focusedUserId, setFocusedUserId] = useState(null);
+
+  // Infinite Scroll & Pagination (4 cards per batch)
   const [page, setPage] = useState(1);
   const [hasNext, setHasNext] = useState(false);
   const [isFetchingUI, setIsFetchingUI] = useState(false);
@@ -66,14 +46,13 @@ export default function Dashboard() {
   // UI States
   const [actionUserId, setActionUserId] = useState(null);
   const [toast, setToast] = useState(null);
-  const [blockRefreshKey, setBlockRefreshKey] = useState(0);
 
   const showToast = useCallback((message, type = 'info') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  // ⚡ SERVER FETCH: limit=4 ensures 4 users load per request
+  // Server Fetch: limit=4
   const fetchSearchResults = useCallback(
     async (pageNum, query, location, isReset = false) => {
       if (isFetchingRef.current && !isReset) return;
@@ -117,19 +96,15 @@ export default function Dashboard() {
     []
   );
 
-  // Auxiliary Sync
-  const syncFriendsAndPending = useCallback(async () => {
+  // Auxiliary Friends Sync
+  const syncFriends = useCallback(async () => {
     if (isSyncingRef.current) return;
     isSyncingRef.current = true;
 
     try {
-      const [friendsRes, pendingRes] = await Promise.allSettled([
-        userApi.get('/friends/list'),
-        userApi.get('/friends/pending'),
-      ]);
-
-      if (friendsRes.status === 'fulfilled' && friendsRes.value.data?.success) {
-        const freshFriends = friendsRes.value.data.data || [];
+      const friendsRes = await userApi.get('/friends/list');
+      if (friendsRes.data?.success) {
+        const freshFriends = friendsRes.data.data || [];
         setFriends(freshFriends);
 
         const friendOnlineMap = new Map(
@@ -145,10 +120,6 @@ export default function Dashboard() {
             return u;
           })
         );
-      }
-
-      if (pendingRes.status === 'fulfilled' && pendingRes.value.data?.success) {
-        setPendingRequests(pendingRes.value.data.data || []);
       }
     } catch (err) {
       console.warn('Sync error:', err);
@@ -167,16 +138,16 @@ export default function Dashboard() {
       return;
     }
 
-    syncFriendsAndPending();
+    syncFriends();
 
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') {
-        syncFriendsAndPending();
+        syncFriends();
       }
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [token, isInitializing, navigate, syncFriendsAndPending]);
+  }, [token, isInitializing, navigate, syncFriends]);
 
   // Search Debounce Trigger
   useEffect(() => {
@@ -184,7 +155,7 @@ export default function Dashboard() {
     fetchSearchResults(1, debouncedQuery, debouncedLocation, true);
   }, [debouncedQuery, debouncedLocation, fetchSearchResults]);
 
-  // Infinite Scroll Observer bound strictly to the inner card scroll container
+  // Infinite Scroll Observer bound strictly to inner scroll container
   useEffect(() => {
     const target = observerTarget.current;
     const rootContainer = scrollContainerRef.current;
@@ -211,7 +182,6 @@ export default function Dashboard() {
   }, [hasNext, debouncedQuery, debouncedLocation, fetchSearchResults]);
 
   const friendSet = useMemo(() => new Set(friends.map((f) => String(f.user_id || f.id))), [friends]);
-  const pendingSet = useMemo(() => new Set(pendingRequests.map((p) => String(p.sender_id))), [pendingRequests]);
 
   const handleSendRequest = useCallback(async (targetId, name) => {
     setSentRequests((prev) => new Set(prev).add(String(targetId)));
@@ -243,40 +213,22 @@ export default function Dashboard() {
       await userApi.post('/friends/unfriend', { friend_id: friendId });
     } catch (err) {
       showToast('Failed to unfriend', 'error');
-      syncFriendsAndPending();
+      syncFriends();
     } finally {
       setActionUserId(null);
     }
-  }, [showToast, syncFriendsAndPending]);
-
-  const handleBlockUser = useCallback(async (targetId, name) => {
-    if (!window.confirm(`Are you sure you want to block ${name || 'this user'}?`)) return;
-
-    setActionUserId(targetId);
-    setUsers((prev) => prev.filter((u) => String(u.user_id) !== String(targetId)));
-    setFriends((prev) => prev.filter((f) => String(f.user_id || f.id) !== String(targetId)));
-    setPendingRequests((prev) => prev.filter((p) => String(p.sender_id) !== String(targetId)));
-    setBlockRefreshKey((prev) => prev + 1);
-
-    try {
-      const res = await userApi.post(`/block/${targetId}`);
-      if (res.data && res.data.success) {
-        showToast(`Blocked ${name || 'user'}.`, 'error');
-      }
-    } catch (err) {
-      showToast(err.response?.data?.message || 'Failed to block user', 'error');
-      fetchSearchResults(1, debouncedQuery, debouncedLocation, true);
-    } finally {
-      setActionUserId(null);
-    }
-  }, [debouncedQuery, debouncedLocation, fetchSearchResults, showToast]);
+  }, [showToast, syncFriends]);
 
   return (
-    // Viewport-locked container: never extends past screen height
-    <div className="h-[calc(100vh-64px)] w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden">
+    <div className="h-[calc(100vh-64px)] w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden select-none relative">
       
+      {/* Background Ambient Glows */}
+      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-10 right-10 w-80 h-80 bg-purple-600/10 rounded-full blur-3xl pointer-events-none" />
+
+      {/* Toast Alert */}
       {toast && (
-        <div className="fixed top-5 right-5 z-50 animate-bounce">
+        <div className="fixed top-4 right-4 z-50 animate-bounce">
           <div
             className={`px-4 py-2.5 rounded-2xl border backdrop-blur-xl shadow-2xl flex items-center gap-3 text-xs font-bold font-mono tracking-wide ${
               toast.type === 'success'
@@ -293,100 +245,80 @@ export default function Dashboard() {
       )}
 
       {/* Top Presence Bar */}
-      <div className="w-full shrink-0 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md">
+      <div className="w-full shrink-0 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md z-10">
         <ActiveFriendsBar friends={friends} />
       </div>
 
-      {/* Workspace Grid */}
-      <main className="max-w-[1600px] w-full mx-auto px-4 py-4 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-5 min-h-0 overflow-hidden">
+      {/* Main Responsive Grid Layout */}
+      <main className="max-w-[1600px] w-full mx-auto px-3 sm:px-6 py-2.5 sm:py-4 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3 lg:gap-6 min-h-0 overflow-hidden z-10">
         
-        {/* Left Control Column: Fixed Height with Internal Scroll */}
-        <section className="lg:col-span-4 h-full flex flex-col min-h-0 overflow-y-auto pr-1 space-y-4">
-          <div className="rounded-3xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-xl p-4 shadow-xl space-y-3 shrink-0">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
-              <span className="text-xs font-bold uppercase tracking-wider font-mono text-slate-300 flex items-center gap-2">
-                <span>⚡</span> Discovery Filter
+        {/* Left Discovery Deck */}
+        <section className="lg:col-span-4 h-fit rounded-2xl sm:rounded-3xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-xl p-3 sm:p-5 shadow-xl space-y-2 sm:space-y-4 shrink-0">
+          <div className="flex items-center justify-between pb-1.5 sm:pb-2 border-b border-slate-800/80">
+            <span className="text-xs font-bold uppercase tracking-wider font-mono text-slate-300 flex items-center gap-2">
+              <span className="text-indigo-400">⚡</span> Discovery Filter
+            </span>
+            {isFetchingUI && (
+              <span className="text-[10px] font-mono text-indigo-400 font-bold animate-pulse">
+                Querying...
               </span>
-              {isFetchingUI && (
-                <span className="text-[10px] font-mono text-indigo-400 font-bold animate-pulse">
-                  Querying...
-                </span>
-              )}
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider mb-1 font-mono text-slate-400">
-                  Search Member
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={searchName}
-                    onChange={(e) => setSearchName(e.target.value)}
-                    placeholder="Search name, bio..."
-                    className="w-full pl-3.5 pr-8 py-2 rounded-2xl border border-slate-800 bg-slate-950/80 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500 transition-all"
-                  />
-                  {searchName && (
-                    <button
-                      onClick={() => setSearchName('')}
-                      className="absolute right-3 top-2 text-xs text-slate-500 hover:text-white"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider mb-1 font-mono text-slate-400">
-                  Location
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={searchLocation}
-                    onChange={(e) => setSearchLocation(e.target.value)}
-                    placeholder="City, region..."
-                    className="w-full pl-3.5 pr-8 py-2 rounded-2xl border border-slate-800 bg-slate-950/80 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500 transition-all"
-                  />
-                  {searchLocation && (
-                    <button
-                      onClick={() => setSearchLocation('')}
-                      className="absolute right-3 top-2 text-xs text-slate-500 hover:text-white"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
+            )}
           </div>
 
-          <div className="shrink-0">
-            <FriendControl
-              pendingRequests={pendingRequests}
-              setPendingRequests={setPendingRequests}
-              onRequestProcessed={syncFriendsAndPending}
-            />
-          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-1 gap-2.5 sm:gap-3">
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider mb-1 font-mono text-slate-400">
+                Search Member
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={searchName}
+                  onChange={(e) => setSearchName(e.target.value)}
+                  placeholder="Search name, bio..."
+                  className="w-full pl-3 pr-7 py-1.5 sm:py-2.5 rounded-xl sm:rounded-2xl border border-slate-800 bg-slate-950/80 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500 transition-all shadow-inner"
+                />
+                {searchName && (
+                  <button
+                    onClick={() => setSearchName('')}
+                    className="absolute right-2.5 top-2 text-xs text-slate-500 hover:text-white"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
 
-          <div className="shrink-0 pb-2">
-            <BlockedList
-              refreshKey={blockRefreshKey}
-              onUnblocked={() => {
-                setBlockRefreshKey((prev) => prev + 1);
-                fetchSearchResults(1, debouncedQuery, debouncedLocation, true);
-              }}
-            />
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider mb-1 font-mono text-slate-400">
+                Location Matrix
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={searchLocation}
+                  onChange={(e) => setSearchLocation(e.target.value)}
+                  placeholder="City, region..."
+                  className="w-full pl-3 pr-7 py-1.5 sm:py-2.5 rounded-xl sm:rounded-2xl border border-slate-800 bg-slate-950/80 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500 transition-all shadow-inner"
+                />
+                {searchLocation && (
+                  <button
+                    onClick={() => setSearchLocation('')}
+                    className="absolute right-2.5 top-2 text-xs text-slate-500 hover:text-white"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </section>
 
-        {/* Right Community Column: Locked viewport with internal scroll */}
-        <section className="lg:col-span-8 h-full flex flex-col min-h-0 bg-slate-900/30 border border-slate-800/80 rounded-3xl backdrop-blur-2xl shadow-2xl overflow-hidden">
+        {/* Right Community Feed */}
+        <section className="lg:col-span-8 flex-1 h-full flex flex-col min-h-0 bg-slate-900/30 border border-slate-800/80 rounded-2xl sm:rounded-3xl backdrop-blur-2xl shadow-2xl overflow-hidden">
           
-          {/* Header (Pinned) */}
-          <div className="px-5 py-3 border-b border-slate-800/80 bg-slate-950/60 backdrop-blur-md flex items-center justify-between shrink-0">
+          {/* Header */}
+          <div className="px-4 sm:px-6 py-2.5 sm:py-3 border-b border-slate-800/80 bg-slate-950/60 backdrop-blur-md flex items-center justify-between shrink-0">
             <div className="flex items-center space-x-2.5">
               <span className="h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
               <h2 className="text-xs font-black uppercase tracking-wider font-mono text-slate-200">
@@ -397,65 +329,192 @@ export default function Dashboard() {
               </span>
             </div>
 
-            <span className="text-[10px] font-mono text-indigo-400 font-bold bg-indigo-500/10 px-3 py-0.5 rounded-full border border-indigo-500/20">
+            <span className="text-[10px] font-mono text-indigo-400 font-bold bg-indigo-500/10 px-2.5 sm:px-3 py-0.5 rounded-full border border-indigo-500/20">
               PAGE {page}
             </span>
           </div>
 
-          {/* ⚡ THE SCROLL CONTAINER: Only this box scrolls */}
+          {/* Scroll Container */}
           <div
             ref={scrollContainerRef}
-            className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0"
+            className="flex-1 overflow-y-auto p-2.5 sm:p-5 min-h-0 space-y-2.5 sm:space-y-4"
             style={{
               scrollbarWidth: 'thin',
               scrollbarColor: '#334155 transparent',
             }}
           >
             {initialLoading ? (
-              // 4 clean skeleton placeholders
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 sm:gap-4">
                 {[1, 2, 3, 4].map((n) => (
                   <div
                     key={n}
-                    className="h-44 rounded-2xl bg-slate-900/40 border border-slate-800 animate-pulse p-4"
+                    className="h-32 sm:h-52 rounded-2xl bg-slate-900/40 border border-slate-800 animate-pulse p-4"
                   />
                 ))}
               </div>
             ) : users.length === 0 ? (
-              <div className="h-full min-h-[220px] flex flex-col items-center justify-center border border-dashed border-slate-800 rounded-2xl bg-slate-950/40 p-6 text-center">
+              <div className="h-full min-h-[200px] flex flex-col items-center justify-center border border-dashed border-slate-800 rounded-2xl bg-slate-950/40 p-6 text-center">
                 <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-400">
                   No Members Found
                 </h3>
+                <p className="text-[11px] font-mono text-slate-500 mt-1">
+                  Adjust your search coordinates or location filters.
+                </p>
               </div>
             ) : (
               <>
-                {/* 2-column grid showing 4 user cards per screen height */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Desktop & Tablet: Classic UserCard Component */}
+                <div className="hidden md:grid grid-cols-2 gap-4">
                   {users.map((user) => (
                     <UserCard
                       key={user.user_id}
                       user={user}
                       isFriend={friendSet.has(String(user.user_id))}
-                      hasInboundReq={pendingSet.has(String(user.user_id))}
+                      hasInboundReq={false}
                       hasSentReq={sentRequests.has(String(user.user_id))}
                       actionUserId={actionUserId}
                       onSendRequest={handleSendRequest}
                       onUnfriend={handleUnfriend}
-                      onBlockUser={handleBlockUser}
+                      onBlockUser={() => {}}
                     />
                   ))}
                 </div>
 
-                {/* Sentinel element to trigger next 4 users when scrolled to bottom */}
-                <div ref={observerTarget} className="py-4 flex justify-center items-center">
+                {/* 
+                  📱 Mobile: High-Impact Social Profile Cards
+                  - Fits 3+ cards in standard viewport
+                  - Tap-to-Focus Ambient Highlight Border
+                  - Real cover image with glassmorphic overlay
+                */}
+                <div className="grid md:hidden grid-cols-1 gap-2.5">
+                  {users.map((user) => {
+                    const isFriend = friendSet.has(String(user.user_id));
+                    const isSent = sentRequests.has(String(user.user_id));
+                    const isProcessing = actionUserId === user.user_id;
+                    const isFocused = focusedUserId === user.user_id;
+
+                    return (
+                      <div
+                        key={user.user_id}
+                        onClick={() => setFocusedUserId((prev) => (prev === user.user_id ? null : user.user_id))}
+                        className={`group relative rounded-2xl overflow-hidden shadow-lg transition-all duration-300 cursor-pointer ${
+                          isFocused
+                            ? 'bg-slate-900/90 ring-2 ring-indigo-500 shadow-indigo-500/25 scale-[1.01]'
+                            : 'bg-slate-950/70 border border-slate-800/80 active:scale-[0.99]'
+                        }`}
+                      >
+                        {/* 1. Ambient Banner & Cover Slot */}
+                        <div className="relative h-12 w-full bg-slate-900 overflow-hidden">
+                          {user.cover_url ? (
+                            <img
+                              src={user.cover_url}
+                              alt="Cover"
+                              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                            />
+                          ) : (
+                            <div className="w-full h-full bg-gradient-to-r from-indigo-950 via-slate-900 to-purple-950 opacity-80" />
+                          )}
+                          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/50 to-transparent" />
+                          
+                          {/* Live Presence Badge */}
+                          <div className="absolute top-2 right-2.5 px-2 py-0.5 rounded-full bg-slate-950/80 backdrop-blur-md border border-slate-800/80 flex items-center gap-1.5 shadow-sm">
+                            <span
+                              className={`h-1.5 w-1.5 rounded-full ${
+                                user.is_online ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'
+                              }`}
+                            />
+                            <span className="text-[8px] font-mono font-bold text-slate-300">
+                              {user.is_online ? 'ONLINE' : 'OFFLINE'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* 2. Overlapping Avatar & Card Content */}
+                        <div className="px-3 pb-2.5 pt-0 flex items-center justify-between gap-2.5">
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            
+                            {/* Avatar with Status Ring */}
+                            <div className="relative -mt-4 shrink-0">
+                              {user.avatar_url ? (
+                                <img
+                                  src={user.avatar_url}
+                                  alt={user.display_name}
+                                  className={`h-11 w-11 rounded-xl object-cover border-2 shadow-md transition-colors ${
+                                    isFocused ? 'border-indigo-500' : 'border-slate-950'
+                                  }`}
+                                />
+                              ) : (
+                                <div className={`h-11 w-11 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center font-bold text-white text-xs shadow-md border-2 ${
+                                  isFocused ? 'border-indigo-500' : 'border-slate-950'
+                                }`}>
+                                  {(user.display_name || user.username || 'U').substring(0, 2).toUpperCase()}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Name, Bio, Location */}
+                            <div className="truncate flex-1 min-w-0 pt-1">
+                              <div className="flex items-center gap-1">
+                                <h4 className={`text-xs font-bold truncate transition-colors ${
+                                  isFocused ? 'text-indigo-300' : 'text-white'
+                                }`}>
+                                  {user.display_name || user.username || 'Anonymous'}
+                                </h4>
+                                {user.is_verified && (
+                                  <span className="text-cyan-400 text-[10px]" title="Verified">✓</span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-slate-400 truncate">
+                                {user.bio || 'Available on network'}
+                              </p>
+                              {user.location && (
+                                <p className="text-[9px] font-mono text-slate-500 truncate flex items-center gap-0.5">
+                                  <span>📍</span> {user.location}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Quick Connect Action */}
+                          <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+                            {isFriend ? (
+                              <button
+                                onClick={() => handleUnfriend(user.user_id, user.display_name)}
+                                disabled={isProcessing}
+                                className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 text-[10px] font-mono font-bold active:scale-95 transition-all"
+                              >
+                                {isProcessing ? '...' : 'Friend ✓'}
+                              </button>
+                            ) : isSent ? (
+                              <span className="px-2.5 py-1.5 rounded-xl bg-indigo-950/40 border border-indigo-500/30 text-indigo-400 text-[10px] font-mono">
+                                Pending
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => handleSendRequest(user.user_id, user.display_name)}
+                                disabled={isProcessing}
+                                className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-mono font-bold shadow-md shadow-indigo-500/20 active:scale-95 transition-all"
+                              >
+                                {isProcessing ? '...' : '+ Connect'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Sentinel Trigger */}
+                <div ref={observerTarget} className="py-2.5 sm:py-4 flex justify-center items-center">
                   {isFetchingUI && page > 1 && (
-                    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] font-mono text-indigo-400">
-                      <div className="h-3 w-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-xl bg-slate-900 border border-slate-800 text-[10px] sm:text-[11px] font-mono text-indigo-400">
+                      <div className="h-2.5 w-2.5 sm:h-3 sm:w-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
                       Loading more...
                     </div>
                   )}
                   {!hasNext && users.length > 0 && (
-                    <span className="text-[10px] font-mono text-slate-600 uppercase tracking-widest">
+                    <span className="text-[9px] sm:text-[10px] font-mono text-slate-600 uppercase tracking-widest">
                       — End of Results —
                     </span>
                   )}
