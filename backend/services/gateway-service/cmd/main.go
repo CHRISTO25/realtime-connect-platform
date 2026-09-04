@@ -22,6 +22,36 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// BanCache caches user ban status for 10 seconds to eliminate internal 429 request storms
+type BanCacheEntry struct {
+	isBanned  bool
+	expiresAt time.Time
+}
+
+var (
+	banCache   = make(map[string]BanCacheEntry)
+	banCacheMu sync.RWMutex
+)
+
+func getCachedBanStatus(userID string) (bool, bool) {
+	banCacheMu.RLock()
+	defer banCacheMu.RUnlock()
+	entry, found := banCache[userID]
+	if found && time.Now().Before(entry.expiresAt) {
+		return entry.isBanned, true
+	}
+	return false, false
+}
+
+func setCachedBanStatus(userID string, isBanned bool) {
+	banCacheMu.Lock()
+	defer banCacheMu.Unlock()
+	banCache[userID] = BanCacheEntry{
+		isBanned:  isBanned,
+		expiresAt: time.Now().Add(10 * time.Second),
+	}
+}
+
 // Shared HTTP Transport configured for Render HTTPS routing and connection pooling
 var defaultTransport = &http.Transport{
 	Proxy: http.ProxyFromEnvironment,
@@ -33,7 +63,8 @@ var defaultTransport = &http.Transport{
 	TLSHandshakeTimeout:   10 * time.Second,
 	ResponseHeaderTimeout: 15 * time.Second,
 	ExpectContinueTimeout: 1 * time.Second,
-	MaxIdleConns:          100,
+	MaxIdleConns:          200,
+	MaxIdleConnsPerHost:   50,
 	IdleConnTimeout:       90 * time.Second,
 }
 
@@ -42,7 +73,7 @@ var internalHTTPClient = &http.Client{
 	Transport: defaultTransport,
 }
 
-// BackendNode represents a single upstream microservice instance in the pool
+// BackendNode represents a single upstream microservice instance in the pool[cite: 1]
 type BackendNode struct {
 	URL   *url.URL
 	Proxy *httputil.ReverseProxy
@@ -62,7 +93,7 @@ func (node *BackendNode) IsAlive() bool {
 	return node.Alive
 }
 
-// LoadBalancer manages dynamic health checks and round-robin failover routing
+// LoadBalancer manages dynamic health checks and round-robin failover routing[cite: 1]
 type LoadBalancer struct {
 	nodes   []*BackendNode
 	current uint64
@@ -200,8 +231,12 @@ func createReverseProxy(target string) (*httputil.ReverseProxy, error) {
 	return proxy, nil
 }
 
-// checkUserBanStatus queries user-service to ensure banned users are rejected immediately
+// checkUserBanStatus queries user-service with 10s caching to eliminate connection pool thrashing
 func checkUserBanStatus(ctx context.Context, userServiceURL, userID string) bool {
+	if banned, hit := getCachedBanStatus(userID); hit {
+		return banned
+	}
+
 	endpoint := fmt.Sprintf("%s/api/v1/users/internal/status?user_id=%s", strings.TrimRight(userServiceURL, "/"), url.QueryEscape(userID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -229,6 +264,7 @@ func checkUserBanStatus(ctx context.Context, userServiceURL, userID string) bool
 		return false
 	}
 
+	setCachedBanStatus(userID, statusData.Data.IsBanned)
 	return statusData.Data.IsBanned
 }
 
@@ -284,7 +320,7 @@ func main() {
 
 	r := gin.Default()
 
-	// Global CORS Handler
+	// Global CORS Handler[cite: 1]
 	r.Use(func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
 		if origin == "" {
@@ -302,7 +338,7 @@ func main() {
 		c.Next()
 	})
 
-	// Gateway Health API
+	// Gateway Health API[cite: 1]
 	r.GET("/health", func(c *gin.Context) {
 		activeNodes := make([]string, 0)
 		for _, n := range chatLB.nodes {
@@ -326,7 +362,7 @@ func main() {
 	})
 
 	// ==========================================
-	// 2. PROTECTED ROUTES & CENTRALIZED JWT GUARD
+	// 2. CENTRALIZED JWT GUARD (CACHED BAN VERIFICATION)
 	// ==========================================
 	authGroup := r.Group("/")
 	authGroup.Use(func(c *gin.Context) {
@@ -345,6 +381,7 @@ func main() {
 			return
 		}
 
+		// Instant Ban Enforcement with In-Memory 10-second Cache
 		if checkUserBanStatus(c.Request.Context(), userURL, claims.UserID) {
 			c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "Your account has been suspended by an administrator."})
 			c.Abort()
@@ -356,7 +393,7 @@ func main() {
 		c.Next()
 	})
 
-	// User Service Path Normalization
+	// User Service Path Normalization[cite: 1]
 	userForwarder := func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if !strings.HasPrefix(path, "/api/v1/users") {
@@ -383,7 +420,7 @@ func main() {
 	authGroup.Any("/heartbeat", userForwarder)
 	authGroup.Any("/logout", userForwarder)
 
-	// Chat REST Routes
+	// Chat REST Routes[cite: 1]
 	authGroup.Any("/api/v1/chat/*path", func(c *gin.Context) {
 		node, _ := chatLB.GetNextHealthyNode()
 		if node != nil {
