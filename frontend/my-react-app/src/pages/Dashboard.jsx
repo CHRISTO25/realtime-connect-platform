@@ -7,7 +7,6 @@ import BlockedList from '../components/BlockedList';
 import UserCard from '../components/UserCard';
 import ActiveFriendsBar from '../components/ActiveFriendsBar';
 
-// Custom Debounce Hook to avoid network thrashing while typing
 function useDebounce(value, delay = 300) {
   const [debouncedValue, setDebouncedValue] = useState(value);
   useEffect(() => {
@@ -21,7 +20,6 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const { token, userId: authUserId, isInitializing } = useAuth();
 
-  // Robust User ID resolution: AuthContext -> LocalStorage -> Decoded JWT fallback
   const activeUserId = useMemo(() => {
     if (authUserId) return authUserId;
     const localId = localStorage.getItem('user_id');
@@ -42,7 +40,7 @@ export default function Dashboard() {
     }
   }, [authUserId, token]);
 
-  // Search Inputs & Debounced State
+  // Search Inputs
   const [searchName, setSearchName] = useState('');
   const [searchLocation, setSearchLocation] = useState('');
   const debouncedQuery = useDebounce(searchName, 300);
@@ -54,9 +52,8 @@ export default function Dashboard() {
   const [pendingRequests, setPendingRequests] = useState([]);
   const [sentRequests, setSentRequests] = useState(new Set());
 
-  // Infinite Scroll & Pagination
+  // Infinite Scroll & Pagination (Locked to 4 cards per batch)
   const [page, setPage] = useState(1);
-  const [totalCount, setTotalCount] = useState(0);
   const [hasNext, setHasNext] = useState(false);
   const [isFetchingUI, setIsFetchingUI] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -66,7 +63,7 @@ export default function Dashboard() {
   const scrollContainerRef = useRef(null);
   const observerTarget = useRef(null);
 
-  // UI Control Signals
+  // UI States
   const [actionUserId, setActionUserId] = useState(null);
   const [toast, setToast] = useState(null);
   const [blockRefreshKey, setBlockRefreshKey] = useState(0);
@@ -76,7 +73,7 @@ export default function Dashboard() {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  // ⚡ SERVER-SIDE SEARCH QUERY (/api/v1/users/search)
+  // ⚡ SERVER FETCH: limit=4 ensures 4 users load per request
   const fetchSearchResults = useCallback(
     async (pageNum, query, location, isReset = false) => {
       if (isFetchingRef.current && !isReset) return;
@@ -87,7 +84,7 @@ export default function Dashboard() {
         const res = await userApi.get(
           `/search?query=${encodeURIComponent(query)}&location=${encodeURIComponent(
             location
-          )}&page=${pageNum}&limit=12`
+          )}&page=${pageNum}&limit=4`
         );
 
         if (res.data && res.data.success) {
@@ -95,13 +92,9 @@ export default function Dashboard() {
           const freshProfiles = payload.users || [];
 
           setHasNext(Boolean(payload.has_next));
-          if (payload.total !== undefined) {
-            setTotalCount(payload.total);
-          }
 
           if (isReset) {
             setUsers(freshProfiles);
-            // Reset scroll position on new searches
             if (scrollContainerRef.current) {
               scrollContainerRef.current.scrollTop = 0;
             }
@@ -124,7 +117,7 @@ export default function Dashboard() {
     []
   );
 
-  // ⚡ BACKGROUND AUXILIARY SYNC (In-flight protected)
+  // Auxiliary Sync
   const syncFriendsAndPending = useCallback(async () => {
     if (isSyncingRef.current) return;
     isSyncingRef.current = true;
@@ -158,13 +151,13 @@ export default function Dashboard() {
         setPendingRequests(pendingRes.value.data.data || []);
       }
     } catch (err) {
-      console.warn('Auxiliary sync error:', err);
+      console.warn('Sync error:', err);
     } finally {
       isSyncingRef.current = false;
     }
   }, []);
 
-  // Initial Auth & Polling Setup
+  // Auth Guard & Polling
   useEffect(() => {
     if (isInitializing) return;
 
@@ -185,13 +178,13 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [token, isInitializing, navigate, syncFriendsAndPending]);
 
-  // Reset Feed on Search Change
+  // Search Debounce Trigger
   useEffect(() => {
     setPage(1);
     fetchSearchResults(1, debouncedQuery, debouncedLocation, true);
   }, [debouncedQuery, debouncedLocation, fetchSearchResults]);
 
-  // Infinite Scroll Observer bound to the scrollable feed viewport
+  // Infinite Scroll Observer bound strictly to the inner card scroll container
   useEffect(() => {
     const target = observerTarget.current;
     const rootContainer = scrollContainerRef.current;
@@ -209,7 +202,7 @@ export default function Dashboard() {
       },
       {
         root: rootContainer,
-        threshold: 0.2,
+        threshold: 0.1,
       }
     );
 
@@ -217,11 +210,9 @@ export default function Dashboard() {
     return () => observer.unobserve(target);
   }, [hasNext, debouncedQuery, debouncedLocation, fetchSearchResults]);
 
-  // Fast Lookups
   const friendSet = useMemo(() => new Set(friends.map((f) => String(f.user_id || f.id))), [friends]);
   const pendingSet = useMemo(() => new Set(pendingRequests.map((p) => String(p.sender_id))), [pendingRequests]);
 
-  // Optimistic Handlers
   const handleSendRequest = useCallback(async (targetId, name) => {
     setSentRequests((prev) => new Set(prev).add(String(targetId)));
     setActionUserId(targetId);
@@ -281,9 +272,9 @@ export default function Dashboard() {
   }, [debouncedQuery, debouncedLocation, fetchSearchResults, showToast]);
 
   return (
-    <div className="h-[calc(100vh-64px)] w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden select-none">
+    // Viewport-locked container: never extends past screen height
+    <div className="h-[calc(100vh-64px)] w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden">
       
-      {/* TOAST NOTIFICATION */}
       {toast && (
         <div className="fixed top-5 right-5 z-50 animate-bounce">
           <div
@@ -301,19 +292,17 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* TOP: ACTIVE FRIENDS BAR (Fixed, Non-collapsing) */}
+      {/* Top Presence Bar */}
       <div className="w-full shrink-0 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md">
         <ActiveFriendsBar friends={friends} />
       </div>
 
-      {/* MAIN TWO-COLUMN WORKSPACE: BOUNDED HEIGHT */}
-      <main className="max-w-[1600px] w-full mx-auto px-3 sm:px-6 py-3 sm:py-4 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-6 min-h-0 overflow-hidden">
+      {/* Workspace Grid */}
+      <main className="max-w-[1600px] w-full mx-auto px-4 py-4 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-5 min-h-0 overflow-hidden">
         
-        {/* LEFT COLUMN: CONTROL SUITE (Independent Smooth Scroll) */}
-        <section className="lg:col-span-4 h-full flex flex-col min-h-0 overflow-y-auto pr-1 space-y-4 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
-          
-          {/* SEARCH CARD */}
-          <div className="rounded-3xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-xl p-4 sm:p-5 shadow-xl space-y-3 shrink-0">
+        {/* Left Control Column: Fixed Height with Internal Scroll */}
+        <section className="lg:col-span-4 h-full flex flex-col min-h-0 overflow-y-auto pr-1 space-y-4">
+          <div className="rounded-3xl border border-slate-800/80 bg-slate-900/40 backdrop-blur-xl p-4 shadow-xl space-y-3 shrink-0">
             <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
               <span className="text-xs font-bold uppercase tracking-wider font-mono text-slate-300 flex items-center gap-2">
                 <span>⚡</span> Discovery Filter
@@ -336,12 +325,12 @@ export default function Dashboard() {
                     value={searchName}
                     onChange={(e) => setSearchName(e.target.value)}
                     placeholder="Search name, bio..."
-                    className="w-full pl-3.5 pr-8 py-2.5 rounded-2xl border border-slate-800 bg-slate-950/80 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500 transition-all shadow-inner"
+                    className="w-full pl-3.5 pr-8 py-2 rounded-2xl border border-slate-800 bg-slate-950/80 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500 transition-all"
                   />
                   {searchName && (
                     <button
                       onClick={() => setSearchName('')}
-                      className="absolute right-3 top-2.5 text-xs text-slate-500 hover:text-white"
+                      className="absolute right-3 top-2 text-xs text-slate-500 hover:text-white"
                     >
                       ✕
                     </button>
@@ -351,20 +340,20 @@ export default function Dashboard() {
 
               <div>
                 <label className="block text-[10px] font-bold uppercase tracking-wider mb-1 font-mono text-slate-400">
-                  Location Matrix
+                  Location
                 </label>
                 <div className="relative">
                   <input
                     type="text"
                     value={searchLocation}
                     onChange={(e) => setSearchLocation(e.target.value)}
-                    placeholder="City, coordinates..."
-                    className="w-full pl-3.5 pr-8 py-2.5 rounded-2xl border border-slate-800 bg-slate-950/80 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500 transition-all shadow-inner"
+                    placeholder="City, region..."
+                    className="w-full pl-3.5 pr-8 py-2 rounded-2xl border border-slate-800 bg-slate-950/80 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500 transition-all"
                   />
                   {searchLocation && (
                     <button
                       onClick={() => setSearchLocation('')}
-                      className="absolute right-3 top-2.5 text-xs text-slate-500 hover:text-white"
+                      className="absolute right-3 top-2 text-xs text-slate-500 hover:text-white"
                     >
                       ✕
                     </button>
@@ -374,7 +363,6 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* REQUESTS PANEL */}
           <div className="shrink-0">
             <FriendControl
               pendingRequests={pendingRequests}
@@ -383,8 +371,7 @@ export default function Dashboard() {
             />
           </div>
 
-          {/* BLOCKED REGISTRY */}
-          <div className="shrink-0 pb-4">
+          <div className="shrink-0 pb-2">
             <BlockedList
               refreshKey={blockRefreshKey}
               onUnblocked={() => {
@@ -395,65 +382,54 @@ export default function Dashboard() {
           </div>
         </section>
 
-        {/* RIGHT COLUMN: DIRECTORY FEED (Pinned Header + Virtualized Scrollable Grid) */}
+        {/* Right Community Column: Locked viewport with internal scroll */}
         <section className="lg:col-span-8 h-full flex flex-col min-h-0 bg-slate-900/30 border border-slate-800/80 rounded-3xl backdrop-blur-2xl shadow-2xl overflow-hidden">
           
-          {/* PINNED FEED HEADER */}
-          <div className="px-5 py-3.5 border-b border-slate-800/80 bg-slate-950/50 backdrop-blur-md flex items-center justify-between shrink-0">
-            <div className="flex items-center space-x-3">
+          {/* Header (Pinned) */}
+          <div className="px-5 py-3 border-b border-slate-800/80 bg-slate-950/60 backdrop-blur-md flex items-center justify-between shrink-0">
+            <div className="flex items-center space-x-2.5">
               <span className="h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
               <h2 className="text-xs font-black uppercase tracking-wider font-mono text-slate-200">
-                Network Feed
+                Community Feed
               </h2>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">
-                {users.length} Active Nodes
+                {users.length} loaded
               </span>
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-mono text-indigo-400 font-bold bg-indigo-500/10 px-3 py-1 rounded-full border border-indigo-500/20">
-                PAGE {page}
-              </span>
-            </div>
+            <span className="text-[10px] font-mono text-indigo-400 font-bold bg-indigo-500/10 px-3 py-0.5 rounded-full border border-indigo-500/20">
+              PAGE {page}
+            </span>
           </div>
 
-          {/* SCROLLABLE FEED CONTAINER */}
+          {/* ⚡ THE SCROLL CONTAINER: Only this box scrolls */}
           <div
             ref={scrollContainerRef}
-            className="flex-1 overflow-y-auto p-4 sm:p-5 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent min-h-0"
+            className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0"
+            style={{
+              scrollbarWidth: 'thin',
+              scrollbarColor: '#334155 transparent',
+            }}
           >
             {initialLoading ? (
+              // 4 clean skeleton placeholders
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {[1, 2, 3, 4, 5, 6].map((n) => (
+                {[1, 2, 3, 4].map((n) => (
                   <div
                     key={n}
-                    className="h-52 rounded-3xl bg-slate-900/40 border border-slate-800/80 animate-pulse p-5 space-y-4"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="h-12 w-12 rounded-2xl bg-slate-800" />
-                      <div className="space-y-2 flex-1">
-                        <div className="h-3 w-28 bg-slate-800 rounded" />
-                        <div className="h-2 w-16 bg-slate-800 rounded" />
-                      </div>
-                    </div>
-                    <div className="h-10 w-full bg-slate-800/40 rounded-xl" />
-                  </div>
+                    className="h-44 rounded-2xl bg-slate-900/40 border border-slate-800 animate-pulse p-4"
+                  />
                 ))}
               </div>
             ) : users.length === 0 ? (
-              <div className="h-full min-h-[300px] flex flex-col items-center justify-center border border-dashed border-slate-800/80 rounded-3xl bg-slate-950/40 p-8 text-center">
-                <div className="h-12 w-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-xl mb-3">
-                  🔍
-                </div>
-                <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-300">
+              <div className="h-full min-h-[220px] flex flex-col items-center justify-center border border-dashed border-slate-800 rounded-2xl bg-slate-950/40 p-6 text-center">
+                <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-400">
                   No Members Found
                 </h3>
-                <p className="text-[11px] font-mono text-slate-500 mt-1 max-w-xs">
-                  No active profiles matched your current search parameters.
-                </p>
               </div>
             ) : (
               <>
+                {/* 2-column grid showing 4 user cards per screen height */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {users.map((user) => (
                     <UserCard
@@ -470,17 +446,17 @@ export default function Dashboard() {
                   ))}
                 </div>
 
-                {/* BOTTOM OBSERVER TARGET */}
-                <div ref={observerTarget} className="py-6 flex justify-center items-center">
+                {/* Sentinel element to trigger next 4 users when scrolled to bottom */}
+                <div ref={observerTarget} className="py-4 flex justify-center items-center">
                   {isFetchingUI && page > 1 && (
-                    <div className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-slate-900/90 border border-slate-800 text-xs font-mono text-indigo-400 shadow-xl">
-                      <div className="h-3.5 w-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                      <span>Streaming next nodes...</span>
+                    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] font-mono text-indigo-400">
+                      <div className="h-3 w-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                      Loading more...
                     </div>
                   )}
                   {!hasNext && users.length > 0 && (
                     <span className="text-[10px] font-mono text-slate-600 uppercase tracking-widest">
-                      — End of Registry Matrix —
+                      — End of Results —
                     </span>
                   )}
                 </div>
